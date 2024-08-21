@@ -1,4 +1,4 @@
-from forecast.connection import SnowparkConnection
+from cortex_forecast.connection import SnowparkConnection
 
 def run_query(query):
     session = SnowparkConnection().get_session()

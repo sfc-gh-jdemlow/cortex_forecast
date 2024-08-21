@@ -2,8 +2,8 @@ project:
   output-dir: _docs
 
 website:
-  title: "storage_check"
-  site-url: "https://sfc-gh-jdemlow.github.io/storage_check"
+  title: "cortex_forecast"
+  site-url: "https://sfc-gh-jdemlow.github.io/cortex_forecast"
   description: ""
   repo-branch: main
-  repo-url: "https://github.com/sfc-gh-jdemlow/storage_check"
+  repo-url: "https://github.com/sfc-gh-jdemlow/cortex_forecast"

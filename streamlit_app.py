@@ -1,16 +1,16 @@
 import streamlit as st
 import os
 
-from forecast.queries import run_query, run_command
-from forecast.visualization import (
+from cortex_forecast.queries import run_query, run_command
+from cortex_forecast.visualization import (
     plot_monthly_storage,
     plot_daily_storage,
     plot_storage_breakdown,
     plot_unused_tables,
     plot_storage_forecast
 )
-from forecast.forecast import SnowflakeMLForecast
-from forecast.recommendations import generate_recommendations, display_recommendations
+from cortex_forecast.forecast import SnowflakeMLForecast
+from cortex_forecast.recommendations import generate_recommendations, display_recommendations
 
 
 # Initialize session state

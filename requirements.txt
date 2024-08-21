@@ -1,3 +1,5 @@
 snowflake-snowpark-python
 snowflake
-SQLAlchemy==1.4.51
+altair
+streamlit
+plotly

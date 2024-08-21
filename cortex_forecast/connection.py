@@ -25,6 +25,7 @@ class SnowparkConnection:
     """
 
     def __init__(self, connection_config: Optional[Dict[str, str]] = None, config_file: str = 'snowflake_config.yaml'):
+        # If a connection config is provided, use it. Otherwise, load from a YAML file or environment variables.
         self.connection_config = connection_config or self.load_connection_config(config_file)
         self.session = self._get_active_or_new_session()
 
@@ -38,14 +39,25 @@ class SnowparkConnection:
         Returns:
             Dict[str, str]: The Snowflake connection configuration.
         """
+        config = {}
         if os.path.isfile(yaml_file):
             try:
                 with open(yaml_file, 'r') as file:
-                    config = yaml.safe_load(file)
-                return config.get('snowflake', {})
+                    config = yaml.safe_load(file).get('snowflake', {})
             except FileNotFoundError:
                 logging.warning(f"Configuration file '{yaml_file}' not found. Falling back to environment variables.")
-        return {}
+        
+        # Fallback to environment variables if certain keys are missing
+        config.update({
+            'account': config.get('account') or os.getenv('SNOWFLAKE_ACCOUNT'),
+            'user': config.get('user') or os.getenv('SNOWFLAKE_USER'),
+            'password': config.get('password') or os.getenv('SNOWFLAKE_PASSWORD'),
+            'role': config.get('role') or os.getenv('SNOWFLAKE_ROLE', 'ACCOUNTADMIN'),
+            'warehouse': config.get('warehouse') or os.getenv('SNOWFLAKE_WAREHOUSE'),
+            'database': config.get('database') or os.getenv('SNOWFLAKE_DATABASE'),
+            'schema': config.get('schema') or os.getenv('SNOWFLAKE_SCHEMA')
+        })
+        return config
 
     def _get_active_or_new_session(self) -> Session:
         """
@@ -68,7 +80,7 @@ class SnowparkConnection:
         Returns:
             Session: The new Snowpark session.
         """
-        session_config = self._build_session_config()
+        session_config = self.connection_config
         try:
             session = Session.builder.configs(session_config).create()
             logging.info("Snowpark session successfully created.")
@@ -76,42 +88,6 @@ class SnowparkConnection:
         except SnowparkSessionException as e:
             logging.error(f"Error creating Snowpark session: {e}")
             raise e
-
-    def _build_session_config(self) -> Dict[str, str]:
-        """
-        Build the session configuration dictionary, prioritizing environment variables if available.
-
-        Returns:
-            Dict[str, str]: The session configuration dictionary.
-        """
-        if os.path.isfile("/snowflake/session/token"):
-            session_config = {
-                'host': os.getenv('SNOWFLAKE_HOST'),
-                'port': os.getenv('SNOWFLAKE_PORT'),
-                'protocol': "https",
-                'account': os.getenv('SNOWFLAKE_ACCOUNT'),
-                'authenticator': "oauth",
-                'token': open('/snowflake/session/token', 'r').read(),
-                'warehouse': self.connection_config.get("warehouse") or os.getenv('SNOWFLAKE_WAREHOUSE'),
-                'database': self.connection_config.get("database") or os.getenv('SNOWFLAKE_DATABASE'),
-                'schema': self.connection_config.get("schema") or os.getenv('SNOWFLAKE_SCHEMA'),
-                'client_session_keep_alive': True
-            }
-        else:
-            session_config = {
-                'account': self.connection_config.get("account") or os.getenv('SNOWFLAKE_ACCOUNT'),
-                'user': self.connection_config.get("user") or os.getenv('SNOWFLAKE_USER'),
-                'password': self.connection_config.get("password") or os.getenv('SNOWFLAKE_PASSWORD'),
-                'role': self.connection_config.get("role") or os.getenv('SNOWFLAKE_ROLE', 'ACCOUNTADMIN'),
-                'warehouse': self.connection_config.get("warehouse") or os.getenv('SNOWFLAKE_WAREHOUSE'),
-                'database': self.connection_config.get("database") or os.getenv('SNOWFLAKE_DATABASE'),
-                'schema': self.connection_config.get("schema") or os.getenv('SNOWFLAKE_SCHEMA'),
-                'client_session_keep_alive': True
-            }
-        for key in ['account', 'user', 'password', 'role', 'warehouse', 'database', 'schema']:
-            if key not in session_config or not session_config[key]:
-                warnings.warn(f"Missing or empty session configuration for '{key}'.")
-        return session_config
 
     def get_session(self) -> Session:
         """

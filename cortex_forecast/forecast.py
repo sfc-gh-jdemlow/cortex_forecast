@@ -7,11 +7,14 @@ __all__ = ['SnowflakeMLForecast']
 import yaml
 import random
 import string
-import streamlit as st
 import logging
+import numpy as np
+import streamlit as st
+import altair as alt
+import pandas as pd
 
 from datetime import datetime
-from .connection import SnowparkConnection
+from cortex_forecast.connection import SnowparkConnection
 
 
 logging.getLogger('snowflake.snowpark').setLevel(logging.WARNING)
@@ -52,7 +55,7 @@ class SnowflakeMLForecast(SnowparkConnection):
 
     def _generate_create_model_sql(self):
         # Use the table name from the config file for the training data
-        input_data = f"SYSTEM$REFERENCE('table', '{self.config['input_data']['table']}')"
+        input_data = f"SYSTEM$REFERENCE('{self.config['input_data']['table_type']}', '{self.config['input_data']['table']}')"
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
         series_col = self.config['input_data'].get('series_column')
@@ -70,18 +73,18 @@ class SnowflakeMLForecast(SnowparkConnection):
         if series_col:
             sql += f"SERIES_COLNAME => '{series_col}',"
         
-        # Construct the CONFIG_OBJECT using OBJECT_CONSTRUCT
-        config_sql = "OBJECT_CONSTRUCT("
+        # Construct the CONFIG_OBJECT as a JSON-like string
+        config_sql = "{"
         for key, value in config_object.items():
             if isinstance(value, dict):
-                nested_config = "OBJECT_CONSTRUCT("
-                nested_config += ", ".join([f"'{k}', {self._format_value(v)}" for k, v in value.items()])
-                nested_config += ")"
-                config_sql += f"'{key}', {nested_config}, "
+                nested_config = "{"
+                nested_config += ", ".join([f"'{k}': {self._format_value(v)}" for k, v in value.items()])
+                nested_config += "}"
+                config_sql += f"'{key}': {nested_config}, "
             else:
-                config_sql += f"'{key}', {self._format_value(value)}, "
-        config_sql = config_sql.rstrip(", ") + ")"
-        
+                config_sql += f"'{key}': {self._format_value(value)}, "
+        config_sql = config_sql.rstrip(", ") + "}"
+
         sql += f"CONFIG_OBJECT => {config_sql},"
         
         sql = sql.rstrip(',')  # Clean up trailing commas
@@ -109,17 +112,24 @@ class SnowflakeMLForecast(SnowparkConnection):
     def create_tags(self):
         """
         Create the necessary tags in Snowflake before running the forecast creation.
+        If a tag already exists, it will notify the user instead of raising an error.
         """
         tags = self.config['model'].get('tags')
         if not tags:
-            return  # No tags to create
+            self.display("No tags to create.", content_type="text")
+            return
 
         for tag_name, tag_comment in tags.items():
-            # TODO: Check if tag already exists
-            create_tag_sql = f"CREATE OR REPLACE TAG {tag_name} COMMENT = 'Specifies the {tag_comment.lower()}';"
-            print(f"Creating tag: {create_tag_sql}")
-            st.write(f"Creating tag: {create_tag_sql}")
-            self.run_command(create_tag_sql)
+            create_tag_sql = f"CREATE TAG {tag_name} COMMENT = 'Specifies the {tag_comment.lower()}';"
+            try:
+                self.display(f"Attempting to create tag: {tag_name}", content_type="text")
+                self.run_command(create_tag_sql)
+                self.display(f"Tag '{tag_name}' created successfully.", content_type="text")
+            except Exception as e:
+                if "already exists" in str(e):
+                    self.display(f"Tag '{tag_name}' already exists.", content_type="text")
+                else:
+                    self.display(f"Error creating tag '{tag_name}': {e}", content_type="text")
 
     def _format_value(self, value):
         """
@@ -135,7 +145,6 @@ class SnowflakeMLForecast(SnowparkConnection):
         elif isinstance(value, str):
             return f"'{value}'"
         return str(value)
-
 
     def _generate_forecast_sql(self):
         try:
@@ -210,9 +219,135 @@ class SnowflakeMLForecast(SnowparkConnection):
         cleanup_commands = f"""
         DROP TABLE IF EXISTS {self.model_name}_train;
         DROP TABLE IF EXISTS {self.config['output']['table']};
-        DROP MODEL IF EXISTS {self.model_name};
         """
+        # DROP MODEL IF EXISTS {self.model_name};
 
         for command in cleanup_commands.split(';'):
             if command.strip():
                 self.run_command(command)
+
+    # Other existing methods...
+
+    def is_streamlit(self):
+        """
+        Check if the environment is Streamlit.
+        """
+        try:
+            return st._is_running_with_streamlit
+        except AttributeError:
+            return False
+
+    def display(self, content, content_type="text", **kwargs):
+        """
+        Display content based on the environment (Streamlit or console).
+        """
+        if self.is_streamlit():
+            if content_type == "text":
+                st.write(content)
+            elif content_type == "chart":
+                st.altair_chart(content, use_container_width=True)
+            elif content_type == "dataframe":
+                st.write(content)
+            elif content_type == "code":
+                st.code(content, language=kwargs.get('language', ''))
+        else:
+            if content_type == "text":
+                print(content)
+            elif content_type == "chart":
+                content.show()
+            elif content_type == "dataframe":
+                print(content)
+            elif content_type == "code":
+                print(content)
+
+    def create_visualization(self, df, max_historic_date):
+        max_historic_date_rule = alt.Chart(pd.DataFrame({'x': [max_historic_date]})).mark_rule(color='orange', strokeDash=[5, 5]).encode(x='x:T')
+        max_historic_date_label = alt.Chart(pd.DataFrame({'x': [max_historic_date], 'label': ['Forecast -->']})).mark_text(
+            align='left', baseline='bottom', dx=5, dy=5, fontSize=12
+        ).encode(x='x:T', y=alt.value(5), text='label:N')
+
+        line_chart = (
+            alt.Chart(df)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("TS:T", axis=alt.Axis(title="Date")),
+                y=alt.Y("Volume:Q"),
+                color=alt.Color('Value Type:N', legend=alt.Legend(title="Forecast Type")),
+                strokeDash=alt.StrokeDash('Type:N', legend=alt.Legend(title="Data Type"))
+            ).properties(
+                title={
+                    "text": ["Forecast and Historic Volume"], 
+                    "subtitle": ["Comparing forecasted volume with historic data"],
+                    "color": "black",
+                    "subtitleColor": "gray"
+                },
+                width=800,
+                height=400
+            )
+        )
+
+        return line_chart, max_historic_date_rule, max_historic_date_label
+
+    def generate_forecast_and_visualization(self, forecasting_period, confidence_interval):
+        df_forecast = self.session.sql(f"""
+            CALL {self.model_name}!FORECAST(
+                FORECASTING_PERIODS => {forecasting_period},
+                CONFIG_OBJECT => {{'prediction_interval': {confidence_interval}}}
+            );
+        """).collect()
+        df_forecast = pd.DataFrame(df_forecast)
+        df_actuals = self.load_historic_actuals()
+        timestamp_col = self.config['input_data']['timestamp_column']
+        target_col = self.config['input_data']['target_column']
+        df_actuals = df_actuals.rename(columns={timestamp_col.upper(): 'TS', target_col.upper(): 'FORECAST'})
+
+        try:
+            print('Getting historical max date') 
+            max_historic_date = df_actuals['TS'].max()
+            df_actuals['LOWER_BOUND'] = np.NaN
+            df_actuals['UPPER_BOUND'] = np.NaN
+            df_actuals['Type'] = 'Historic'
+            df_forecast['Type'] = 'Forecast'
+            df_combined = pd.concat([df_forecast, df_actuals], ignore_index=True)
+            df_combined['LOWER_BOUND'] = np.where(df_combined['LOWER_BOUND'] < 0, 0, df_combined['LOWER_BOUND'])
+            df = df_combined.melt(id_vars=['TS', 'Type'], value_vars=['FORECAST', 'LOWER_BOUND', 'UPPER_BOUND'], var_name='Value Type', value_name='Volume')
+            df = df.dropna(subset=['Volume'])
+            line_chart, max_historic_date_rule, max_historic_date_label = self.create_visualization(df, max_historic_date)
+            if self.is_streamlit():
+                st.session_state['chart'] = alt.layer(line_chart, max_historic_date_rule, max_historic_date_label)
+                st.session_state['df'] = df
+            else:
+                self.display(alt.layer(line_chart, max_historic_date_rule, max_historic_date_label), content_type="chart")
+                self.display(df, content_type="dataframe")
+            self.show_key_data_aspects()
+        except KeyError as e:
+            print(f"KeyError encountered: {e}")
+
+    def show_key_data_aspects(self):
+        self.display("Top 10 Feature Importances", content_type="text")
+        feature_importance = f"CALL {self.model_name}!EXPLAIN_FEATURE_IMPORTANCE();"
+        f_i = self.session.sql(feature_importance).collect()[:10]
+        df_fi = pd.DataFrame(f_i)
+        df_fi = df_fi.drop(columns=['SERIES'])
+        chart = alt.Chart(df_fi).mark_bar().encode(
+            x=alt.X('SCORE:Q', title='Feature Importance'),
+            y=alt.Y('FEATURE_NAME:N', title='Feature', sort='-x')
+        ).properties(
+            title="Feature Importance Plot",
+            width=600,
+            height=300
+        )
+        self.display(chart, content_type="chart")
+        self.display(df_fi, content_type="dataframe")
+        
+        self.display("Underlying Model Metrics", content_type="text")
+        metric_call = f"CALL {self.model_name}!SHOW_EVALUATION_METRICS();"
+        metrics = self.session.sql(metric_call).collect()
+        metrics = [metric.as_dict() for metric in metrics]
+        metrics = pd.DataFrame(metrics)
+        metrics = metrics.drop(columns=['SERIES'])
+        self.display(metrics, content_type="dataframe")
+
+    # Custom method to load historical data
+    def load_historic_actuals(self):
+        return self.session.table(self.config['input_data']['table']).to_pandas()
