@@ -1,9 +1,9 @@
 website:
-  title: "SPCSDataScience"
-  site-url: "https://sfc-gh-jdemlow.github.io/SPCSDataScience"
+  title: "cortex_forecast"
+  site-url: "https://sfc-gh-jdemlow.github.io/cortex_forecast"
   description: "Snowpark Container Service With Streamlit"
   repo-branch: main
-  repo-url: "https://github.com/sfc-gh-jdemlow/SPCSDataScience"
+  repo-url: "https://github.com/sfc-gh-jdemlow/cortex_forecast"
 
 project:
   output-dir: _site

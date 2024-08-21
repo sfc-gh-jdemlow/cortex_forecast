@@ -72,8 +72,8 @@ jobs:
       - name: Run Aggregation Function Example
         id: runaggregation
         run: |
-          snow sql -q "SELECT * FROM EDO.DEV.ORDERS LIMIT 2"
-          snow sql -f ./EDO/files/perform_aggregation.sql
-          snow sql -q "SELECT * FROM EDO.DEV.ORDERS_AGGREGATES LIMIT 2"
-          snow sql -f ./EDO/files/perform_aggregation_config.sql -D SOURCE_TABLE=EDO.DEV.ORDERS -D TARGET_TABLE=EDO.PROD.ORDERS_AGGREGATES
-          snow sql -q "SELECT * FROM EDO.PROD.ORDERS_AGGREGATES LIMIT 2"
+          snow sql -q "SELECT * FROM cortex_forecast.DEV.ORDERS LIMIT 2"
+          snow sql -f ./cortex_forecast/files/perform_aggregation.sql
+          snow sql -q "SELECT * FROM cortex_forecast.DEV.ORDERS_AGGREGATES LIMIT 2"
+          snow sql -f ./cortex_forecast/files/perform_aggregation_config.sql -D SOURCE_TABLE=cortex_forecast.DEV.ORDERS -D TARGET_TABLE=cortex_forecast.PROD.ORDERS_AGGREGATES
+          snow sql -q "SELECT * FROM cortex_forecast.PROD.ORDERS_AGGREGATES LIMIT 2"
