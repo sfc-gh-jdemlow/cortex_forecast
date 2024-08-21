@@ -1,0 +1,20 @@
+project:
+  type: website
+
+website:
+  twitter-card: true
+  open-graph: true
+  repo-actions: [issue]
+  navbar:
+    background: primary
+  sidebar:
+    style: floating
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+
+metadata-files: [nbdev.yml, sidebar.yml]
+  

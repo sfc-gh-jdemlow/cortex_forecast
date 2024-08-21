@@ -1,0 +1,31 @@
+model:
+  name: my_forecast_model
+  tags:
+    environment: production
+    team: data_science
+  comment: "Forecast model for predicting sales trends."
+
+input_data:
+  table: storage_usage_train
+  table_type: table # or view
+  timestamp_column: usage_date
+  target_column: storage_gb
+  series_column: null  # Set to column name for multiple time series
+  exogenous_columns:
+    # - column1
+    # - column2
+
+forecast_config:
+  training_days: 365
+  forecast_days: 30
+  config_object:
+    on_error: skip
+    evaluate: true
+    evaluation_config:
+      n_splits: 2 # Default is 2
+      # test_size: 30 # Defualt is null
+      gap: 0
+      prediction_interval: 0.95
+
+output:
+  table: storage_forecast_results
