@@ -32,36 +32,50 @@ class SnowflakeMLForecast(SnowparkConnection):
         suffix = ''.join(random.choices(string.ascii_lowercase, k=5))
         timestamp = datetime.now().strftime("%Y%m%d")
         return f"{self.config['model']['name']}_{timestamp}_{suffix}"
-
+    
     def _generate_input_data_sql(self):
         table = self.config['input_data']['table']
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
         exogenous_cols = self.config['input_data'].get('exogenous_columns') or []
-        
-        training_days = self.config['forecast_config']['training_days']
+        training_days = self.config['forecast_config'].get('training_days')
 
         columns = [f"TO_TIMESTAMP_NTZ({timestamp_col}) AS {timestamp_col}",
-                f"{target_col} AS target"]
-        columns.extend(exogenous_cols)
+                f"{target_col} AS {target_col}"]
+
+        if exogenous_cols:
+            columns.extend(exogenous_cols)
+        else:
+            columns.append("*")
 
         sql = f"""
-        CREATE OR REPLACE TRANSIENT TABLE {self.model_name}_train AS
-        SELECT {', '.join(columns)}
+        CREATE OR REPLACE TEMPORARY TABLE {self.model_name}_train AS
+        SELECT {', '.join(columns)} EXCLUDE ({timestamp_col}, {target_col})
         FROM {table}
-        WHERE TO_TIMESTAMP_NTZ({timestamp_col}) < DATEADD(day, -{training_days}, CURRENT_DATE())
         """
+
+        if training_days:
+            sql += f"""
+            WHERE TO_TIMESTAMP_NTZ({timestamp_col}) 
+            BETWEEN 
+            DATEADD(day, -{training_days}, (SELECT MAX({timestamp_col}) FROM {table})) 
+            AND 
+            (SELECT MAX({timestamp_col}) FROM {table})
+            """
+
+        sql += ";"
+
+        print("Generated SQL:")
+        print(sql)
         return sql
 
     def _generate_create_model_sql(self):
-        # Use the table name from the config file for the training data
-        input_data = f"SYSTEM$REFERENCE('{self.config['input_data']['table_type']}', '{self.config['input_data']['table']}')"
+        input_data = f"SYSTEM$REFERENCE('{self.config['input_data']['table_type']}', '{self.model_name}_train')"
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
         series_col = self.config['input_data'].get('series_column')
         config_object = self.config['forecast_config'].get('config_object', {})
-        
-        # Start building the SQL
+    
         sql = f"""
         CREATE OR REPLACE SNOWFLAKE.ML.FORECAST {self.model_name}(
             INPUT_DATA => {input_data},
@@ -69,11 +83,9 @@ class SnowflakeMLForecast(SnowparkConnection):
             TARGET_COLNAME => '{target_col}',
         """
         
-        # Add optional series column; use NULL if series_col is None
         if series_col:
-            sql += f"SERIES_COLNAME => '{series_col}',"
+            sql += f"""SERIES_COLNAME => '{series_col}',\n"""
         
-        # Construct the CONFIG_OBJECT as a JSON-like string
         config_sql = "{"
         for key, value in config_object.items():
             if isinstance(value, dict):
@@ -89,8 +101,6 @@ class SnowflakeMLForecast(SnowparkConnection):
         
         sql = sql.rstrip(',')  # Clean up trailing commas
         sql += ")"
-        
-        # Handle optional TAG and COMMENT
         tags = self.config['model'].get('tags')
         comment = self.config['model'].get('comment')
         
@@ -103,7 +113,6 @@ class SnowflakeMLForecast(SnowparkConnection):
         
         sql += ";"
 
-        # Debug prints
         print("Generated SQL:")
         print(sql)
         
@@ -148,10 +157,10 @@ class SnowflakeMLForecast(SnowparkConnection):
 
     def _generate_forecast_sql(self):
         try:
-            forecast_days = self.config['forecast_config']['forecast_days']
+            # Fetch values from the configuration
+            forecast_days = self.config['forecast_config'].get('forecast_days')
             output_table = self.config['output']['table']
-            
-            # Extract the evaluation config from the nested config_object
+            input_data_table = self.config['forecast_config'].get('table')  # Table to be used for prediction, if any
             config_object = self.config['forecast_config'].get('config_object', {})
             evaluation_config = config_object.get('evaluation_config', {})
 
@@ -159,29 +168,53 @@ class SnowflakeMLForecast(SnowparkConnection):
             print(f"Forecast Days: {forecast_days}")
             print(f"Output Table: {output_table}")
             print(f"Evaluation Config: {evaluation_config}")
-
-            # Ensure 'prediction_interval' is present in evaluation_config
-            prediction_interval = evaluation_config.get('prediction_interval', 0.95)  # Default to 0.95 if not provided
-
+            prediction_interval = evaluation_config.get('prediction_interval', 0.95)
+            series_col = self.config['input_data'].get('series_column')
+            timestamp_col = self.config['input_data']['timestamp_column']
             sql = f"""
             CREATE OR REPLACE TABLE {output_table} AS
-            SELECT
-                ts AS forecast_date,
-                forecast,
-                lower_bound,
-                upper_bound
+            SELECT 
+            """
+            if series_col:
+                sql += f"series::string as {series_col},\n"
+
+            sql += f"""
+                ts AS {timestamp_col},
+                CASE WHEN forecast < 0 THEN 0 ELSE forecast END AS forecast,
+                CASE WHEN lower_bound < 0 THEN 0 ELSE lower_bound END AS lower_bound,
+                CASE WHEN upper_bound < 0 THEN 0 ELSE upper_bound END AS upper_bound
             FROM
                 TABLE({self.model_name}!FORECAST(
-                    FORECASTING_PERIODS => {forecast_days},
-                    CONFIG_OBJECT => {{'prediction_interval': {prediction_interval}}}
-                ));
             """
+
+            # Include the INPUT_DATA if input_data_table is provided in the configuration
+            if input_data_table:
+                sql += f"""
+                INPUT_DATA => SYSTEM$REFERENCE('TABLE', '{input_data_table}'),
+                TIMESTAMP_COLNAME => '{timestamp_col}',\n"""
+
+            # Add optional series column; use NULL if series_col is None
+            if series_col:
+                sql += f"""
+                    SERIES_COLNAME => '{series_col}',\n
+                """
+
+            sql += f"CONFIG_OBJECT => {{'prediction_interval': {prediction_interval}}}\n"
+            
+            # Include FORECASTING_PERIODS only if forecast_days is provided
+            if forecast_days:
+                sql += f", FORECASTING_PERIODS => {forecast_days}"
+            
+            sql += "));"
+
             print("Generated Forecast SQL:")
             print(sql)
             return sql
+
         except KeyError as e:
             print(f"KeyError encountered: {e}")
             raise e
+
 
     def run_query(self, query):
         """
@@ -210,7 +243,7 @@ class SnowflakeMLForecast(SnowparkConnection):
         self.run_command(self._generate_forecast_sql())
 
         print("Step 4/4: Fetching forecast results...")
-        forecast_data = self.run_query(f"SELECT * FROM {self.config['output']['table']} ORDER BY forecast_date")
+        forecast_data = self.run_query(f"SELECT * FROM {self.config['output']['table']} ORDER BY {self.config['input_data']['timestamp_column']}")
 
         return forecast_data
 
@@ -289,39 +322,43 @@ class SnowflakeMLForecast(SnowparkConnection):
         return line_chart, max_historic_date_rule, max_historic_date_label
 
     def generate_forecast_and_visualization(self, forecasting_period, confidence_interval):
-        df_forecast = self.session.sql(f"""
-            CALL {self.model_name}!FORECAST(
-                FORECASTING_PERIODS => {forecasting_period},
-                CONFIG_OBJECT => {{'prediction_interval': {confidence_interval}}}
-            );
-        """).collect()
-        df_forecast = pd.DataFrame(df_forecast)
-        df_actuals = self.load_historic_actuals()
-        timestamp_col = self.config['input_data']['timestamp_column']
-        target_col = self.config['input_data']['target_column']
-        df_actuals = df_actuals.rename(columns={timestamp_col.upper(): 'TS', target_col.upper(): 'FORECAST'})
+        if self.config['input_data'].get('series_column') is None:
+            df_forecast = self.session.sql(f"""
+                CALL {self.model_name}!FORECAST(
+                    FORECASTING_PERIODS => {forecasting_period},
+                    CONFIG_OBJECT => {{'prediction_interval': {confidence_interval}}}
+                );
+            """).collect()
+            df_forecast = pd.DataFrame(df_forecast)
+            df_actuals = self.load_historic_actuals()
+            timestamp_col = self.config['input_data']['timestamp_column']
+            target_col = self.config['input_data']['target_column']
+            df_actuals = df_actuals.rename(columns={timestamp_col.upper(): 'TS', target_col.upper(): 'FORECAST'})
 
-        try:
-            print('Getting historical max date') 
-            max_historic_date = df_actuals['TS'].max()
-            df_actuals['LOWER_BOUND'] = np.NaN
-            df_actuals['UPPER_BOUND'] = np.NaN
-            df_actuals['Type'] = 'Historic'
-            df_forecast['Type'] = 'Forecast'
-            df_combined = pd.concat([df_forecast, df_actuals], ignore_index=True)
-            df_combined['LOWER_BOUND'] = np.where(df_combined['LOWER_BOUND'] < 0, 0, df_combined['LOWER_BOUND'])
-            df = df_combined.melt(id_vars=['TS', 'Type'], value_vars=['FORECAST', 'LOWER_BOUND', 'UPPER_BOUND'], var_name='Value Type', value_name='Volume')
-            df = df.dropna(subset=['Volume'])
-            line_chart, max_historic_date_rule, max_historic_date_label = self.create_visualization(df, max_historic_date)
-            if self.is_streamlit():
-                st.session_state['chart'] = alt.layer(line_chart, max_historic_date_rule, max_historic_date_label)
-                st.session_state['df'] = df
-            else:
-                self.display(alt.layer(line_chart, max_historic_date_rule, max_historic_date_label), content_type="chart")
-                self.display(df, content_type="dataframe")
-            self.show_key_data_aspects()
-        except KeyError as e:
-            print(f"KeyError encountered: {e}")
+            try:
+                print('Getting historical max date') 
+                max_historic_date = df_actuals['TS'].max()
+                df_actuals['LOWER_BOUND'] = np.NaN
+                df_actuals['UPPER_BOUND'] = np.NaN
+                df_actuals['Type'] = 'Historic'
+                df_forecast['Type'] = 'Forecast'
+                df_combined = pd.concat([df_forecast, df_actuals], ignore_index=True)
+                df_combined['LOWER_BOUND'] = np.where(df_combined['LOWER_BOUND'] < 0, 0, df_combined['LOWER_BOUND'])
+                df = df_combined.melt(id_vars=['TS', 'Type'], value_vars=['FORECAST', 'LOWER_BOUND', 'UPPER_BOUND'], var_name='Value Type', value_name='Volume')
+                df = df.dropna(subset=['Volume'])
+                line_chart, max_historic_date_rule, max_historic_date_label = self.create_visualization(df, max_historic_date)
+                if self.is_streamlit():
+                    st.session_state['chart'] = alt.layer(line_chart, max_historic_date_rule, max_historic_date_label)
+                    st.session_state['df'] = df
+                else:
+                    self.display(alt.layer(line_chart, max_historic_date_rule, max_historic_date_label), content_type="chart")
+                    self.display(df, content_type="dataframe")
+            except KeyError as e:
+                print(f"KeyError encountered: {e}")
+        else:
+            print("Currently Plotting is not supported with series this is a POC might come back and implement")
+        self.show_key_data_aspects()
+       
 
     def show_key_data_aspects(self):
         self.display("Top 10 Feature Importances", content_type="text")
@@ -351,3 +388,5 @@ class SnowflakeMLForecast(SnowparkConnection):
     # Custom method to load historical data
     def load_historic_actuals(self):
         return self.session.table(self.config['input_data']['table']).to_pandas()
+
+# %%
