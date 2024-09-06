@@ -51,3 +51,4 @@ snowpark:
           type: "string"
       returns: string
       execute_as_caller: true
+

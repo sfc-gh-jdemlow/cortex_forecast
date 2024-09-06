@@ -1,215 +1,72 @@
 import streamlit as st
+import yaml
 import os
+from snowflake.snowpark.version import VERSION
 
-from cortex_forecast.queries import run_query, run_command
-from cortex_forecast.visualization import (
-    plot_monthly_storage,
-    plot_daily_storage,
-    plot_storage_breakdown,
-    plot_unused_tables,
-    plot_storage_forecast
-)
 from cortex_forecast.forecast import SnowflakeMLForecast
-from cortex_forecast.recommendations import generate_recommendations, display_recommendations
+from cortex_forecast.connection import SnowparkConnection
 
-
-# Initialize session state
-if 'storage_data' not in st.session_state:
-    st.session_state.storage_data = None
-if 'daily_storage_data' not in st.session_state:
-    st.session_state.daily_storage_data = None
-if 'breakdown_data' not in st.session_state:
-    st.session_state.breakdown_data = None
-if 'forecast_generated' not in st.session_state:
-    st.session_state.forecast_generated = False
-if 'forecast_data' not in st.session_state:
-    st.session_state.forecast_data = None
-if 'actual_data' not in st.session_state:
-    st.session_state.actual_data = None
-if 'unused_tables' not in st.session_state:
-    st.session_state.unused_tables = None
-
-# Streamlit app
-st.title("Snowflake Storage Analysis")
-
-# Fetch data only if it's not already in the session state
-if st.session_state.storage_data is None:
-    storage_query = """
-    select to_char(usage_date,'YYYYMM') as sort_month,
-           to_char(usage_date,'Mon-YYYY') as month,
-           avg(storage_bytes) / power(1024, 3) as storage,
-           avg(stage_bytes) / power(1024, 3) as stage,
-           avg(failsafe_bytes) / power(1024, 3) as failsafe
-    from snowflake.account_usage.storage_usage
-    group by month, sort_month
-    order by sort_month;
-    """
-    st.session_state.storage_data = run_query(storage_query)
-
-# Visualize monthly storage usage over time
-st.subheader("Monthly Storage Usage Over Time")
-plot_monthly_storage(st.session_state.storage_data)
-
-# Fetch daily storage usage data if not in session state
-if st.session_state.daily_storage_data is None:
-    daily_storage_query = """
-    SELECT 
-        USAGE_DATE,
-        STORAGE_BYTES / POWER(1024, 3) AS STORAGE_GB,
-        STAGE_BYTES / POWER(1024, 3) AS STAGE_GB,
-        FAILSAFE_BYTES / POWER(1024, 3) AS FAILSAFE_GB
-    FROM snowflake.account_usage.storage_usage
-    WHERE USAGE_DATE >= DATEADD(day, -30, CURRENT_DATE())
-    ORDER BY USAGE_DATE;
-    """
-    st.session_state.daily_storage_data = run_query(daily_storage_query)
-
-# Visualize daily storage usage
-st.subheader("Daily Storage Usage (Last 30 Days)")
-plot_daily_storage(st.session_state.daily_storage_data)
-
-# Fetch current storage breakdown if not in session state
-if st.session_state.breakdown_data is None:
-    breakdown_query = """
-    WITH storage_stats AS (
-        SELECT 
-            STORAGE_BYTES as total_active_bytes,
-            STAGE_BYTES as total_stage_bytes,
-            FAILSAFE_BYTES as total_failsafe_bytes
-        FROM snowflake.account_usage.storage_usage
-        WHERE USAGE_DATE = (SELECT MAX(USAGE_DATE) FROM snowflake.account_usage.storage_usage)
-    )
-    SELECT 
-        ROUND(total_active_bytes / POWER(1024, 3), 1) AS "Active Storage (GB)",
-        ROUND(total_stage_bytes / POWER(1024, 3), 1) AS "Stage Storage (GB)",
-        ROUND(total_failsafe_bytes / POWER(1024, 3), 1) AS "Failsafe Storage (GB)",
-        ROUND((total_stage_bytes / (total_active_bytes + total_stage_bytes + total_failsafe_bytes)) * 100, 1) AS "Stage %",
-        ROUND((total_failsafe_bytes / (total_active_bytes + total_stage_bytes + total_failsafe_bytes)) * 100, 1) AS "Fail-Safe %"
-    FROM storage_stats;
-    """
-    st.session_state.breakdown_data = run_query(breakdown_query)
-
-# Display current storage breakdown
-st.subheader("Current Storage Breakdown")
-st.table(st.session_state.breakdown_data)
-plot_storage_breakdown(st.session_state.breakdown_data)
-
-# Unused Tables Analysis
-st.subheader("Unused Tables Analysis")
-if 'unused_days' not in st.session_state or 'storage_cost_per_tb' not in st.session_state:
-    st.session_state.unused_days = 90
-    st.session_state.storage_cost_per_tb = 23.0
-
-col1, col2 = st.columns(2)
-with col1:
-    unused_days = st.number_input("Days since last access", min_value=1, value=st.session_state.unused_days)
-with col2:
-    storage_cost_per_tb = st.number_input("Storage cost per TB per month ($)", min_value=0.0, value=st.session_state.storage_cost_per_tb)
-
-if st.session_state.unused_tables is None or unused_days != st.session_state.unused_days or storage_cost_per_tb != st.session_state.storage_cost_per_tb:
-    st.session_state.unused_days = unused_days
-    st.session_state.storage_cost_per_tb = storage_cost_per_tb
-
-    unused_tables_query = f"""
-    WITH
-    access_history AS (
-        SELECT *
-        FROM snowflake.account_usage.access_history
-    ),
-    access_history_flattened AS (
-        SELECT
-            access_history.query_id,
-            access_history.query_start_time,
-            access_history.user_name,
-            objects_accessed.value:objectId::integer AS table_id,
-            objects_accessed.value:objectName::text AS object_name,
-            objects_accessed.value:objectDomain::text AS object_domain,
-            objects_accessed.value:columns AS columns_array
-        FROM access_history, LATERAL FLATTEN(access_history.base_objects_accessed) AS objects_accessed
-    ),
-    table_access_history AS (
-        SELECT
-            query_id,
-            query_start_time,
-            user_name,
-            object_name AS fully_qualified_table_name,
-            table_id
-        FROM access_history_flattened
-        WHERE
-            object_domain = 'Table'
-            AND table_id IS NOT NULL
-    ),
-    table_access_summary AS (
-        SELECT
-            table_id,
-            MAX(query_start_time) AS last_accessed_at,
-            MAX_BY(user_name, query_start_time) AS last_accessed_by,
-            MAX_BY(query_id, query_start_time) AS last_query_id
-        FROM table_access_history
-        GROUP BY 1
-    ),
-    table_storage_metrics AS (
-        SELECT
-            id AS table_id,
-            table_catalog || '.' ||table_schema ||'.' || table_name AS fully_qualified_table_name,
-            (active_bytes + time_travel_bytes + failsafe_bytes + retained_for_clone_bytes)/POWER(1024,4) AS total_storage_tb,
-            total_storage_tb*12*{storage_cost_per_tb} AS annualized_storage_cost
-        FROM snowflake.account_usage.table_storage_metrics
-        WHERE
-            NOT deleted
-    )
-    SELECT
-        table_storage_metrics.*,
-        table_access_summary.* EXCLUDE (table_id),
-        DATEDIFF(day, last_accessed_at, CURRENT_DATE()) AS days_since_last_access
-    FROM table_storage_metrics
-    INNER JOIN table_access_summary
-        ON table_storage_metrics.table_id=table_access_summary.table_id
-    WHERE
-        last_accessed_at < DATEADD(day, -{unused_days}, CURRENT_DATE())
-    ORDER BY table_storage_metrics.annualized_storage_cost DESC
-    """
-
-    with st.spinner("Analyzing unused tables..."):
-        st.session_state.unused_tables = run_query(unused_tables_query)
-
-if st.session_state.unused_tables.empty:
-    st.info("No unused tables found based on the specified criteria.")
-else:
-    st.success(f"Found {len(st.session_state.unused_tables)} unused tables.")
-    plot_unused_tables(st.session_state.unused_tables)
-
-# Storage Forecast
-st.subheader("Storage Prediction")
-if st.button("Generate Storage Forecast"):
-    st.session_state.forecast_generated = True
-
-if st.session_state.forecast_generated:
-    col1, col2 = st.columns(2)
-    with col1:
-        training_days = st.number_input("Training Days", min_value=30, value=60)
-        _ = run_command(f"""
-        CREATE OR REPLACE TABLE storage_usage_train AS
-        SELECT 
-            TO_TIMESTAMP_NTZ(usage_date) AS usage_date,
-            storage_bytes / POWER(1024, 3) AS storage_gb
-        FROM snowflake.account_usage.storage_usage
-        WHERE TO_TIMESTAMP_NTZ(usage_date) < DATEADD(day, -{training_days}, CURRENT_DATE());
-        """)
-        st.session_state.actual_data = run_query(f"""
-        SELECT 
-            usage_date,
-            storage_bytes / POWER(1024, 3) AS storage_gb
-        FROM snowflake.account_usage.storage_usage
-        WHERE usage_date >= DATEADD(day, -{training_days}, CURRENT_DATE())
-        ORDER BY usage_date
-        """)
-    with col2:
-        predicted_days = st.number_input("Prediction Days", min_value=5, value=30)
+def create_connection_config():
+    st.header("Snowflake Connection Configuration")
     
-    if st.button("Run Forecast"):
-        forecast_model = SnowflakeMLForecast(
-            config_file='./forecast/files/yaml/forecast_config.yaml',
+    connection_config = {
+        'account': st.text_input("Snowflake Account"),
+        'user': st.text_input("Username"),
+        'password': st.text_input("Password", type="password"),
+        'role': st.text_input("Role", value="CORTEX_USER_ROLE"),
+        'warehouse': st.text_input("Warehouse", value="CORTEX_WH"),
+        'database': st.text_input("Database", value="CORTEX"),
+        'schema': st.text_input("Schema", value="DEV")
+    }
+    
+    return connection_config
+
+def create_forecast_config():
+    st.header("Forecast Configuration")
+    
+    config = {
+        'model': {
+            'name': st.text_input("Model Name", value="my_forecast_model"),
+            'tags': {
+                'environment': st.selectbox("Environment", ["development", "production", "testing"], index=0),
+                'team': st.text_input("Team Name", value="data_science")
+            },
+            'comment': st.text_area("Model Comment", value="Forecast model for predicting trends.")
+        },
+        'input_data': {
+            'table': st.text_input("Input Table Name", value="storage_usage_train"),
+            'table_type': st.selectbox("Table Type", ["table", "view"], index=0),
+            'timestamp_column': st.text_input("Timestamp Column", value="usage_date"),
+            'target_column': st.text_input("Target Column", value="storage_gb"),
+            'series_column': st.text_input("Series Column (optional)"),
+            'exogenous_columns': st.text_input("Exogenous Columns (comma-separated)")
+        },
+        'forecast_config': {
+            'training_days': st.number_input("Training Days", value=180, min_value=1),
+            'forecast_days': st.number_input("Forecast Days", value=30, min_value=1),
+            'config_object': {
+                'on_error': st.selectbox("On Error", ["skip", "fail"], index=0),
+                'evaluate': st.checkbox("Evaluate", value=True),
+                'evaluation_config': {
+                    'n_splits': st.number_input("Number of Splits", value=2, min_value=1),
+                    'gap': st.number_input("Gap", value=0, min_value=0),
+                    'prediction_interval': st.slider("Prediction Interval", min_value=0.0, max_value=1.0, value=0.95, step=0.01)
+                }
+            }
+        },
+        'output': {
+            'table': st.text_input("Output Table Name", value="storage_forecast_results")
+        }
+    }
+    
+    return config
+
+def main():
+    st.title("Snowflake ML Forecast Configuration")
+    
+    # Try to create a SnowparkConnection
+    try:
+        connection = SnowparkConnection(
             connection_config={
                 'user': os.getenv('SNOWFLAKE_USER'),
                 'password': os.getenv('SNOWFLAKE_PASSWORD'),
@@ -217,40 +74,79 @@ if st.session_state.forecast_generated:
                 'database': 'CORTEX',
                 'warehouse': 'CORTEX_WH',
                 'schema': 'DEV',
-                'role': 'CORTEX_USER_ROLE'  # Use the desired role
+                'role': 'CORTEX_USER_ROLE'
             }
         )
-        st.session_state.forecast_data = forecast_model.create_and_run_forecast()
-        print(st.session_state.forecast_data)
-        # st.session_state.forecast_data, st.session_state.actual_data = generate_storage_forecast(training_days, predicted_days)
-        st.success("Forecast generated successfully!")
-        plot_storage_forecast(st.session_state.forecast_data, st.session_state.actual_data)
-
-        # Storage Cost Estimation
-        st.subheader("Storage Cost Estimation")
-        cost_per_tb_per_month = st.number_input("Cost per TB per month ($)", value=23.0)
+        session = connection.get_session()
         
-        last_actual_storage = st.session_state.actual_data['STORAGE_GB'].iloc[-1]
-        last_predicted_storage = st.session_state.forecast_data['FORECAST'].iloc[-1]
-        last_upper_bound = st.session_state.forecast_data['UPPER_BOUND'].iloc[-1]
-        last_lower_bound = st.session_state.forecast_data['LOWER_BOUND'].iloc[-1]
+        # Display connection information
+        snowflake_environment = session.sql('SELECT current_user(), current_version()').collect()
+        snowpark_version = VERSION
+        
+        st.write("Connection Established with the following parameters:")
+        st.write(f"User: {snowflake_environment[0][0]}")
+        st.write(f"Role: {session.get_current_role()}")
+        st.write(f"Database: {session.get_current_database()}")
+        st.write(f"Schema: {session.get_current_schema()}")
+        st.write(f"Warehouse: {session.get_current_warehouse()}")
+        st.write(f"Snowflake version: {snowflake_environment[0][1]}")
+        st.write(f"Snowpark for Python version: {snowpark_version[0]}.{snowpark_version[1]}.{snowpark_version[2]}")
+        
+        connection_config = None
+    except Exception as e:
+        st.error(f"Failed to establish connection: {str(e)}")
+        st.write("Please provide connection details:")
+        connection_config = create_connection_config()
+    
+    forecast_config = create_forecast_config()
+    
+    if st.button("Generate Forecast"):
+        # Convert exogenous_columns to a list before saving
+        if forecast_config['input_data']['exogenous_columns']:
+            forecast_config['input_data']['exogenous_columns'] = [col.strip() for col in forecast_config['input_data']['exogenous_columns'].split(',')]
+        else:
+            forecast_config['input_data']['exogenous_columns'] = []
+        
+        # Save the forecast config
+        with open('forecast_config.yaml', 'w') as f:
+            yaml.dump(forecast_config, f)
+        
+        try:
+            # Create SnowflakeMLForecast instance
+            forecast_model = SnowflakeMLForecast(
+                config_file='forecast_config.yaml',
+                connection_config=connection_config if connection_config else None,
+                is_streamlit=True
+            )
+            
+            # Create and run forecast
+            forecast_data = forecast_model.create_and_run_forecast()
+            
+            st.success("Forecast generated successfully!")
+            
+            # Display the first few rows of the forecast data
+            st.write("Forecast Data Preview:")
+            st.dataframe(forecast_data.head())
+            
+            # Generate forecast and visualization
+            forecasting_period = forecast_config['forecast_config']['forecast_days']
+            confidence_interval = forecast_config['forecast_config']['config_object']['evaluation_config']['prediction_interval']
+            forecast_model.generate_forecast_and_visualization(forecasting_period, confidence_interval)
+            
+            # Display the chart if it's available in the session state
+            if 'chart' in st.session_state:
+                st.altair_chart(st.session_state['chart'], use_container_width=True)
+            
+            # Display the full dataframe if it's available in the session state
+            if 'df' in st.session_state:
+                st.write("Full Forecast Data:")
+                st.dataframe(st.session_state['df'])
+            
+            # Cleanup
+            forecast_model.cleanup()
+        
+        except Exception as e:
+            st.error(f"An error occurred: {str(e)}")
 
-        current_monthly_cost = (last_actual_storage / 1024) * cost_per_tb_per_month
-        predicted_monthly_cost = (last_predicted_storage / 1024) * cost_per_tb_per_month
-        upper_bound_monthly_cost = (last_upper_bound / 1024) * cost_per_tb_per_month
-        lower_bound_monthly_cost = (last_lower_bound / 1024) * cost_per_tb_per_month
-
-        st.write(f"Estimated current monthly storage cost: ${current_monthly_cost:.2f}")
-        st.write(f"Estimated monthly storage cost in {predicted_days} days:")
-        st.write(f"- Forecast: ${predicted_monthly_cost:.2f}")
-        st.write(f"- Upper Bound: ${upper_bound_monthly_cost:.2f}")
-        st.write(f"- Lower Bound: ${lower_bound_monthly_cost:.2f}")
-
-# Recommendations
-st.subheader("Recommendations")
-recommendations = generate_recommendations(
-    st.session_state.forecast_data, 
-    st.session_state.unused_tables, 
-    st.session_state.breakdown_data
-)
-display_recommendations(recommendations)
+if __name__ == "__main__":
+    main()
