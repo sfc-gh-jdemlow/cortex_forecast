@@ -123,7 +123,8 @@ forecast_model = SnowflakeMLForecast(
 )
 
 # Step 2: Run Forecast and Visualize Results
-forecast_model.generate_forecast_and_visualization(forecasting_period=30, confidence_interval=0.95)
+forecast_data = forecast_model.create_and_run_forecast()
+forecast_model.generate_forecast_and_visualization()
 
 # Step 3: Clean Up
 forecast_model.cleanup()
@@ -133,3 +134,91 @@ forecast_model.cleanup()
 
 > See in Docs/ folder for two example of this in action. One is for
 > storage and the other is for Taxi Pick up in NYC.
+
+``` python
+from snowflake.snowpark.version import VERSION
+from cortex_forecast.forecast import SnowflakeMLForecast
+import os
+```
+
+## Create Snowflake Connection Using SnowflakeMLForecast
+
+> Note: Make sure that you create a yaml file that you would like to so
+> that the SnowflakeMLForecast can read the connection information from
+> it and be able to build your forecast.
+
+``` python
+forecast_model = SnowflakeMLForecast(
+    config_file='./cortex_forecast/files/yaml/storage_forecast_config.yaml',
+    connection_config={
+        'user': os.getenv('SNOWFLAKE_USER'),
+        'password': os.getenv('SNOWFLAKE_PASSWORD'),
+        'account': os.getenv('SNOWFLAKE_ACCOUNT'),
+        'database': 'CORTEX',
+        'warehouse': 'CORTEX_WH',
+        'schema': 'DEV',
+        'role': 'CORTEX_USER_ROLE'  # Use the desired role
+    },
+    is_streamlit=False
+)
+
+snowflake_environment = forecast_model.session.sql('SELECT current_user(), current_version()').collect()
+snowpark_version = VERSION
+print('\nConnection Established with the following parameters:')
+print('Snowflake version           : {}'.format(snowflake_environment[0][1]))
+print('Snowpark for Python version : {}.{}.{}'.format(snowpark_version[0], snowpark_version[1], snowpark_version[2]))
+```
+
+``` python
+# Create Training Data
+training_days = 365
+
+forecast_model.session.sql(f'''CREATE OR REPLACE TABLE storage_usage_train AS
+    SELECT 
+        TO_TIMESTAMP_NTZ(usage_date) AS usage_date,
+        storage_bytes / POWER(1024, 3) AS storage_gb
+    FROM 
+    (
+        SELECT * 
+            FROM snowflake.account_usage.storage_usage
+            WHERE usage_date < CURRENT_DATE()
+    )
+    WHERE TO_TIMESTAMP_NTZ(usage_date) > DATEADD(day, -{training_days}, CURRENT_DATE())
+''').collect()
+forecast_model.session.sql('SELECT * FROM storage_usage_train ORDER BY usage_date DESC LIMIT 10').show()
+```
+
+``` python
+import pandas as pd
+import matplotlib.pyplot as plt
+```
+
+``` python
+df = forecast_model.session.sql('SELECT * FROM storage_usage_train ORDER BY usage_date').to_pandas()
+df.head()
+df = df.set_index('USAGE_DATE')
+df['STORAGE_GB'].plot(figsize=(10, 6), title='Storage GB Over Time')
+
+# Show the plot
+plt.xlabel('Date')
+plt.ylabel('Storage GB')
+plt.grid(True)
+plt.show()
+```
+
+### Train a Model
+
+> This will use what is inside of the yaml file that you created that
+> you passed over to the SnowflakeMLForecast object
+
+``` python
+# Run Forecast
+forecast_data = forecast_model.create_and_run_forecast()
+forecast_data.head()
+```
+
+### Visualize Forecast
+
+``` python
+forecast_model.generate_forecast_and_visualization(show_historical=True)
+```
