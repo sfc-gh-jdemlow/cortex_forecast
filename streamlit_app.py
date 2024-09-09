@@ -43,23 +43,36 @@ def create_forecast_config():
         },
         'forecast_config': {
             'training_days': st.number_input("Training Days", value=180, min_value=1),
-            'forecast_days': st.number_input("Forecast Days", value=30, min_value=1),
-            'config_object': {
-                'on_error': st.selectbox("On Error", ["skip", "fail"], index=0),
-                'evaluate': st.checkbox("Evaluate", value=True),
-                'evaluation_config': {
-                    'n_splits': st.number_input("Number of Splits", value=2, min_value=1),
-                    'gap': st.number_input("Gap", value=0, min_value=0),
-                    'prediction_interval': st.slider("Prediction Interval", min_value=0.0, max_value=1.0, value=0.95, step=0.01)
-                }
-            }
-        },
-        'output': {
-            'table': st.text_input("Output Table Name", value="storage_forecast_results")
+        }
+    }
+
+    # Add radio button to choose between 'forecast_days' and 'table'
+    forecast_input_type = st.radio("Forecast Mode", ["Use Forecast Days", "Use Table for Prediction"])
+
+    if forecast_input_type == "Use Forecast Days":
+        config['forecast_config']['forecast_days'] = st.number_input("Forecast Days", value=30, min_value=1)
+        config['forecast_config']['table'] = None
+    else:
+        config['forecast_config']['table'] = st.text_input("Prediction Table", value="ny_taxi_rides_h3_predict")
+        config['forecast_config']['forecast_days'] = None  # No forecast days if table is used
+
+    # Additional configuration options
+    config['forecast_config']['config_object'] = {
+        'on_error': st.selectbox("On Error", ["skip", "fail"], index=0),
+        'evaluate': st.checkbox("Evaluate", value=True),
+        'evaluation_config': {
+            'n_splits': st.number_input("Number of Splits", value=2, min_value=1),
+            'gap': st.number_input("Gap", value=0, min_value=0),
+            'prediction_interval': st.slider("Prediction Interval", min_value=0.0, max_value=1.0, value=0.95, step=0.01)
         }
     }
     
+    config['output'] = {
+        'table': st.text_input("Output Table Name", value="storage_forecast_results")
+    }
+    
     return config
+
 
 def main():
     st.title("Snowflake ML Forecast Configuration")
@@ -129,9 +142,7 @@ def main():
             st.dataframe(forecast_data.head())
             
             # Generate forecast and visualization
-            forecasting_period = forecast_config['forecast_config']['forecast_days']
-            confidence_interval = forecast_config['forecast_config']['config_object']['evaluation_config']['prediction_interval']
-            forecast_model.generate_forecast_and_visualization(forecasting_period, confidence_interval)
+            forecast_model.generate_forecast_and_visualization()
             
             # Display the chart if it's available in the session state
             if 'chart' in st.session_state:
@@ -141,9 +152,6 @@ def main():
             if 'df' in st.session_state:
                 st.write("Full Forecast Data:")
                 st.dataframe(st.session_state['df'])
-            
-            # Cleanup
-            forecast_model.cleanup()
         
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
