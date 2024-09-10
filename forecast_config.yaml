@@ -8,7 +8,7 @@ forecast_config:
     on_error: skip
   forecast_days: null
   table: ny_taxi_rides_h3_predict
-  training_days: 27
+  training_days: 60
 input_data:
   exogenous_columns:
   - SCHOOL_HOLIDAY
