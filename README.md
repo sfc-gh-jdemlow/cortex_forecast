@@ -149,7 +149,7 @@ import os
 
 ``` python
 forecast_model = SnowflakeMLForecast(
-    config_file='./cortex_forecast/files/yaml/storage_forecast_config.yaml',
+   config='./cortex_forecast/files/yaml/storage_forecast_config.yaml',
     connection_config={
         'user': os.getenv('SNOWFLAKE_USER'),
         'password': os.getenv('SNOWFLAKE_PASSWORD'),

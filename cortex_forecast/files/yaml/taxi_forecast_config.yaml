@@ -11,13 +11,12 @@ input_data:
   timestamp_column: pickup_time
   target_column: pickups
   series_column: h3  # Set to column name for multiple time series
-  exogenous_columns: # If none will use all in the table 
-    # - column1
-    # - column2
+  exogenous_columns:
+  - PUBLIC_HOLIDAY
+  - SPORT_EVENT
 
 forecast_config:
   training_days: 30 # Optional if none use full table
-  # forecast_days: 30
   table: ny_taxi_rides_h3_predict # If there is a table it will create the prediction for this data
   config_object:
     on_error: skip

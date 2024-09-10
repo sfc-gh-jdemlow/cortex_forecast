@@ -1,10 +1,74 @@
 import streamlit as st
-import yaml
 import os
 from snowflake.snowpark.version import VERSION
-
-from cortex_forecast.forecast import SnowflakeMLForecast
 from cortex_forecast.connection import SnowparkConnection
+
+st.set_page_config(page_title="Snowflake ML Forecast", layout="wide")
+
+st.title("Snowflake ML Forecast - Home")
+
+st.markdown("""
+## Welcome to the Snowflake ML Forecast Application
+
+This application leverages Snowflake's ML capabilities to create, run, and schedule time series forecasts using your data. Our intuitive interface guides you through the process of selecting your data, configuring your forecast model, executing the forecast, and setting up automated schedules.
+
+### Key Features:
+
+1. **Data Selection**: 
+   - Choose your Snowflake database, schema, and table/view.
+   - Preview your data and select relevant columns for forecasting.
+
+2. **Forecast Configuration**:
+   - Set up your forecast model with customizable parameters.
+   - Define timestamp, target, and optional series columns.
+   - Select exogenous variables to enhance your forecast.
+
+3. **Model Execution**:
+   - Run your configured forecast model on demand.
+   - View forecast results and visualizations.
+
+4. **Scheduling**: (Coming in anohter release)
+
+
+### How to Use:
+
+1. Start by connecting to your Snowflake account (if not already connected).
+2. Navigate through the pages using the sidebar:
+   - **Database and Table Selection**: Choose your data source.
+   - **Forecast Configuration**: Set up your forecast model parameters.
+   - **Model Execution**: Run your forecast and view results.
+
+3. Follow the prompts on each page to complete the process.
+
+### Getting Started:
+
+To begin, ensure you have a valid Snowflake connection. If you're not yet connected, you'll be prompted to enter your Snowflake credentials.
+
+Once connected, use the sidebar to navigate to the "Database and Table Selection" page to start setting up your forecast.
+
+### Need Help?
+
+If you encounter any issues or have questions, please contact our support team or refer to the documentation for more detailed information on using this application.
+
+Let's get started with your time series forecasting!
+""")
+
+
+st.markdown("""
+### Next Steps:
+
+1. Use the sidebar to navigate to "Database and Table Selection".
+2. Select your data source for forecasting.
+3. Configure your forecast model parameters.
+4. Run your forecast and view the results.
+5. Optionally, set up a schedule for automated forecasting.
+
+Good luck with your forecasting project!
+""")
+
+# Initialize session state
+if 'snowpark_connection' not in st.session_state:
+    st.session_state.snowpark_connection = None
 
 def create_connection_config():
     st.header("Snowflake Connection Configuration")
@@ -21,140 +85,62 @@ def create_connection_config():
     
     return connection_config
 
-def create_forecast_config():
-    st.header("Forecast Configuration")
+def display_connection_info(session):
+    snowflake_environment = session.sql('SELECT current_user(), current_version()').collect()
+    snowpark_version = VERSION
     
-    config = {
-        'model': {
-            'name': st.text_input("Model Name", value="my_forecast_model"),
-            'tags': {
-                'environment': st.selectbox("Environment", ["development", "production", "testing"], index=0),
-                'team': st.text_input("Team Name", value="data_science")
-            },
-            'comment': st.text_area("Model Comment", value="Forecast model for predicting trends.")
-        },
-        'input_data': {
-            'table': st.text_input("Input Table Name", value="storage_usage_train"),
-            'table_type': st.selectbox("Table Type", ["table", "view"], index=0),
-            'timestamp_column': st.text_input("Timestamp Column", value="usage_date"),
-            'target_column': st.text_input("Target Column", value="storage_gb"),
-            'series_column': st.text_input("Series Column (optional)"),
-            'exogenous_columns': st.text_input("Exogenous Columns (comma-separated)")
-        },
-        'forecast_config': {
-            'training_days': st.number_input("Training Days", value=180, min_value=1),
-        }
-    }
+    st.write("Connection Established with the following parameters:")
+    st.write(f"User: {snowflake_environment[0][0]}")
+    st.write(f"Role: {session.get_current_role()}")
+    st.write(f"Database: {session.get_current_database()}")
+    st.write(f"Schema: {session.get_current_schema()}")
+    st.write(f"Warehouse: {session.get_current_warehouse()}")
+    st.write(f"Snowflake version: {snowflake_environment[0][1]}")
+    st.write(f"Snowpark for Python version: {snowpark_version[0]}.{snowpark_version[1]}.{snowpark_version[2]}")
 
-    # Add radio button to choose between 'forecast_days' and 'table'
-    forecast_input_type = st.radio("Forecast Mode", ["Use Forecast Days", "Use Table for Prediction"])
-
-    if forecast_input_type == "Use Forecast Days":
-        config['forecast_config']['forecast_days'] = st.number_input("Forecast Days", value=30, min_value=1)
-        config['forecast_config']['table'] = None
-    else:
-        config['forecast_config']['table'] = st.text_input("Prediction Table", value="ny_taxi_rides_h3_predict")
-        config['forecast_config']['forecast_days'] = None  # No forecast days if table is used
-
-    # Additional configuration options
-    config['forecast_config']['config_object'] = {
-        'on_error': st.selectbox("On Error", ["skip", "fail"], index=0),
-        'evaluate': st.checkbox("Evaluate", value=True),
-        'evaluation_config': {
-            'n_splits': st.number_input("Number of Splits", value=2, min_value=1),
-            'gap': st.number_input("Gap", value=0, min_value=0),
-            'prediction_interval': st.slider("Prediction Interval", min_value=0.0, max_value=1.0, value=0.95, step=0.01)
-        }
-    }
-    
-    config['output'] = {
-        'table': st.text_input("Output Table Name", value="storage_forecast_results")
-    }
-    
-    return config
-
-
-def main():
-    st.title("Snowflake ML Forecast Configuration")
-    
-    # Try to create a SnowparkConnection
+# Create SnowparkConnection if not exists
+if st.session_state.snowpark_connection is None:
     try:
-        connection = SnowparkConnection(
-            connection_config={
-                'user': os.getenv('SNOWFLAKE_USER'),
-                'password': os.getenv('SNOWFLAKE_PASSWORD'),
-                'account': os.getenv('SNOWFLAKE_ACCOUNT'),
-                'database': 'CORTEX',
-                'warehouse': 'CORTEX_WH',
-                'schema': 'DEV',
-                'role': 'CORTEX_USER_ROLE'
-            }
-        )
+        # First, try to connect using environment variables
+        connection_config = {
+            'user': os.getenv('SNOWFLAKE_USER'),
+            'password': os.getenv('SNOWFLAKE_PASSWORD'),
+            'account': os.getenv('SNOWFLAKE_ACCOUNT'),
+            'database': 'CORTEX',
+            'warehouse': 'CORTEX_WH',
+            'schema': 'DEV',
+            'role': 'CORTEX_USER_ROLE'
+        }
+        
+        connection = SnowparkConnection(connection_config=connection_config)
         session = connection.get_session()
-        
-        # Display connection information
-        snowflake_environment = session.sql('SELECT current_user(), current_version()').collect()
-        snowpark_version = VERSION
-        
-        st.write("Connection Established with the following parameters:")
-        st.write(f"User: {snowflake_environment[0][0]}")
-        st.write(f"Role: {session.get_current_role()}")
-        st.write(f"Database: {session.get_current_database()}")
-        st.write(f"Schema: {session.get_current_schema()}")
-        st.write(f"Warehouse: {session.get_current_warehouse()}")
-        st.write(f"Snowflake version: {snowflake_environment[0][1]}")
-        st.write(f"Snowpark for Python version: {snowpark_version[0]}.{snowpark_version[1]}.{snowpark_version[2]}")
-        
-        connection_config = None
-    except Exception as e:
-        st.error(f"Failed to establish connection: {str(e)}")
-        st.write("Please provide connection details:")
-        connection_config = create_connection_config()
-    
-    forecast_config = create_forecast_config()
-    
-    if st.button("Generate Forecast"):
-        # Convert exogenous_columns to a list before saving
-        if forecast_config['input_data']['exogenous_columns']:
-            forecast_config['input_data']['exogenous_columns'] = [col.strip() for col in forecast_config['input_data']['exogenous_columns'].split(',')]
-        else:
-            forecast_config['input_data']['exogenous_columns'] = []
-        
-        # Save the forecast config
-        with open('forecast_config.yaml', 'w') as f:
-            yaml.dump(forecast_config, f)
-        
-        try:
-            # Create SnowflakeMLForecast instance
-            forecast_model = SnowflakeMLForecast(
-                config_file='forecast_config.yaml',
-                connection_config=connection_config if connection_config else None,
-                is_streamlit=True
-            )
-            
-            # Create and run forecast
-            forecast_data = forecast_model.create_and_run_forecast()
-            
-            st.success("Forecast generated successfully!")
-            
-            # Display the first few rows of the forecast data
-            st.write("Forecast Data Preview:")
-            st.dataframe(forecast_data.head())
-            
-            # Generate forecast and visualization
-            forecast_model.generate_forecast_and_visualization()
-            
-            # Display the chart if it's available in the session state
-            if 'chart' in st.session_state:
-                st.altair_chart(st.session_state['chart'], use_container_width=True)
-            
-            # Display the full dataframe if it's available in the session state
-            if 'df' in st.session_state:
-                st.write("Full Forecast Data:")
-                st.dataframe(st.session_state['df'])
-        
-        except Exception as e:
-            st.error(f"An error occurred: {str(e)}")
 
-if __name__ == "__main__":
-    main()
+        st.session_state.connection_config = connection_config
+        st.session_state.snowpark_connection = connection
+        display_connection_info(session)
+        
+    except Exception as e:
+        st.error(f"Failed to establish connection using environment variables: {str(e)}")
+        st.write("Please provide connection details:")
+        
+        user_config = create_connection_config()
+        
+        if st.button("Connect"):
+            try:
+                connection = SnowparkConnection(connection_config=user_config)
+                session = connection.get_session()
+                
+                st.session_state.snowpark_connection = connection
+                display_connection_info(session)
+            except Exception as e:
+                st.error(f"Failed to establish connection with provided details: {str(e)}")
+
+# Connection setup (you can keep your existing connection code here)
+if 'snowpark_connection' not in st.session_state:
+    st.session_state.snowpark_connection = None
+
+if st.session_state.snowpark_connection is None:
+    st.warning("You are not connected to Snowflake. Please connect to proceed.")
+    # Your connection setup code here
+else:
+    st.success("You are connected to Snowflake. You can proceed to the next steps using the sidebar navigation.")

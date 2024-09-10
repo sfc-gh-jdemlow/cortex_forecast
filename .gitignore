@@ -151,3 +151,4 @@ checklink/cookies.txt
 .quarto
 requirements.snowflake.txt
 *snowflake_sqlalchemy-1.5.3-py3-none-any.whl
+*03_scheduling.py

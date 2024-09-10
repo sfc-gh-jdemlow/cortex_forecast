@@ -8,19 +8,22 @@ forecast_config:
     on_error: skip
   forecast_days: null
   table: ny_taxi_rides_h3_predict
-  training_days: 180
+  training_days: 27
 input_data:
-  exogenous_columns: []
-  series_column: h3
-  table: ny_taxi_rides_h3_train
+  exogenous_columns:
+  - SCHOOL_HOLIDAY
+  - PUBLIC_HOLIDAY
+  - SPORT_EVENT
+  series_column: H3
+  table: NY_TAXI_RIDES_H3_TRAIN
   table_type: table
-  target_column: pickups
-  timestamp_column: pickup_time
+  target_column: PICKUPS
+  timestamp_column: PICKUP_TIME
 model:
   comment: Forecast model for predicting trends.
-  name: my_taxi_forecast_model
+  name: my_forecast_model
   tags:
     environment: development
     team: data_science
 output:
-  table: taxi_forecast_results
+  table: NY_TAXI_RIDES_H3_TRAIN_FORECAST_RESULTS

@@ -12,21 +12,36 @@ import numpy as np
 import pandas as pd
 import altair as alt
 import logging
+import numpy as np
 
+from typing import Union, Dict
 from datetime import datetime
-from .connection import SnowparkConnection
+from cortex_forecast.connection import SnowparkConnection
 
 logging.getLogger('snowflake.snowpark').setLevel(logging.WARNING)
 
 # %% ../nbs/01_cortex_forecast.ipynb 5
 class SnowflakeMLForecast(SnowparkConnection):
-    def __init__(self, config_file, connection_config=None, is_streamlit=False):
+    def __init__(self, config: Union[str, Dict], connection_config=None, is_streamlit=False):
         super().__init__(connection_config=connection_config)
-        with open(config_file, 'r') as file:
-            self.config = yaml.safe_load(file)
+        self.config = self._load_config(config)
         self.model_name = self._generate_unique_model_name()
         self.training_data_query = None
         self.is_streamlit = is_streamlit
+
+    def _load_config(self, config: Union[str, Dict]) -> Dict:
+        if isinstance(config, str):
+            # If config is a string, assume it's a file path
+            try:
+                with open(config, 'r') as file:
+                    return yaml.safe_load(file)
+            except Exception as e:
+                raise ValueError(f"Error loading config file: {str(e)}")
+        elif isinstance(config, dict):
+            # If config is already a dictionary, use it directly
+            return config
+        else:
+            raise TypeError("Config must be either a file path (string) or a dictionary.")
 
     def _generate_unique_model_name(self):
         suffix = ''.join(random.choices(string.ascii_lowercase, k=5))
@@ -37,20 +52,26 @@ class SnowflakeMLForecast(SnowparkConnection):
         table = self.config['input_data']['table']
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
+        series_col = self.config['input_data'].get('series_column')
         exogenous_cols = self.config['input_data'].get('exogenous_columns') or []
         training_days = self.config['forecast_config'].get('training_days')
 
-        columns = [f"TO_TIMESTAMP_NTZ({timestamp_col}) AS {timestamp_col}",
-                   f"{target_col} AS {target_col}"]
+        # Always include timestamp, target, and series (if present) columns
+        base_columns = [f"TO_TIMESTAMP_NTZ({timestamp_col}) AS {timestamp_col}",
+                        f"{target_col} AS {target_col}"]
+        if series_col:
+            base_columns.append(f"{series_col} AS {series_col}")
 
         if exogenous_cols:
-            columns.extend(exogenous_cols)
+            columns = base_columns + exogenous_cols
+            select_clause = f"SELECT {', '.join(columns)}"
         else:
-            columns.append("*")
+            exclude_cols = [timestamp_col, target_col]
+            select_clause = f"SELECT {', '.join(base_columns)}, * EXCLUDE ({', '.join(exclude_cols)})"
 
         sql = f"""
         CREATE OR REPLACE TEMPORARY TABLE {self.model_name}_train AS
-        SELECT {', '.join(columns)} EXCLUDE ({timestamp_col}, {target_col})
+        {select_clause}
         FROM {table}
         """
 
@@ -116,7 +137,7 @@ class SnowflakeMLForecast(SnowparkConnection):
 
         self.display("Generated SQL:", content_type="text")
         self.display(sql, content_type="code", language="sql")
-        
+        self.create_model_query_text = sql
         return sql
 
     def _format_value(self, value):
@@ -177,13 +198,14 @@ class SnowflakeMLForecast(SnowparkConnection):
 
             sql += f"CONFIG_OBJECT => {{'prediction_interval': {prediction_interval}}}\n"
             
-            if forecast_days:
+            if forecast_days is not None:
                 sql += f", FORECASTING_PERIODS => {forecast_days}"
             
             sql += "));"
 
             self.display("Generated Forecast SQL:", content_type="text")
             self.display(sql, content_type="code", language="sql")
+            self.create_model_prediction_query_text = sql
             return sql
 
         except KeyError as e:
