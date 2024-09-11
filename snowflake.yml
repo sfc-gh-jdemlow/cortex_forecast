@@ -2,53 +2,10 @@ definition_version: "1.1"
 streamlit:
   name: cortex_forecast_review_forecast
   stage: cortex_forecast_streamlit_stage
-  query_warehouse: DEMO_WH
+  query_warehouse: CORTEX_WH
   main_file: streamlit_app.py
   env_file: environment.yml
+  pages_dir: pages/
   additional_source_files:
     - cortex_forecast/forecast.py
-    - cortex_forecast/queries.py
-    - cortex_forecast/recommendations.py
     - cortex_forecast/connection.py
-    - cortex_forecast/visualization.py
-snowpark:
-  project_name: "cortex_forecast"
-  stage_name: "dev_deployment"
-  src: ""
-  functions:
-    - name: hello_function
-      handler: "cortex_forecast.functions.hello_function"
-      signature:
-        - name: "name"
-          type: "string"
-      returns: string
-  procedures:
-    - name: hello_procedure
-      handler: "cortex_forecast.procedures.hello_procedure"
-      signature:
-        - name: "name"
-          type: "string"
-      returns: string
-      execute_as_caller: true
-    - name: perform_aggregation
-      handler: "cortex_forecast.procedures.perform_aggregation"
-      signature: 
-        - name: "aggrequest"
-          type: "string"
-      returns: string
-      execute_as_caller: true
-    - name: test_procedure
-      handler: "cortex_forecast.procedures.test_procedure"
-      signature: ""
-      returns: string
-      execute_as_caller: true
-    - name: perform_aggregation_sqlach
-      handler: "cortex_forecast.procedures.perform_aggregation_sqlach"
-      imports:
-        - "@cortex_forecast.DEV.CODE/snowflake_sqlalchemy-1.6.1-py3-none-any.whl"
-      signature: 
-        - name: "aggrequest"
-          type: "string"
-      returns: string
-      execute_as_caller: true
-

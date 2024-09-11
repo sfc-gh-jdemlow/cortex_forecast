@@ -1,0 +1,46 @@
+name: Deploy Cortex Forecast SIS
+on:
+  push:
+    branches:
+      - "*"
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }} # Add these secerts to github repository
+  SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }} # Add these secerts to github repository
+  SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }} # Add these secerts to github repository
+  SNOWFLAKE_DATABASE: 'CORTEX' # Add these secerts to github repository
+  SNOWFLAKE_SCHEMA: 'DEV' # Add these secerts to github repository
+  SNOWFLAKE_WAREHOUSE: 'CORTEX_WH' # Add these secerts to github repository
+  SNOWFLAKE_ROLE: 'CORTEX_USER_ROLE' # Add these secerts to github repository
+
+jobs:
+  snowflake-cli:
+    name: Snowflake CLI
+    runs-on: ubuntu-latest
+    steps:
+    
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Snowflake CLI
+        uses: Snowflake-Labs/snowflake-cli-action@v1
+        with:
+          cli-version: "latest"
+          default-config-file-path: "./config.toml"
+        
+      - name: Test Snowflake CLI
+        id: TestSnowClI
+        run: |
+          snow --version
+          snow connection set-default "default"
+          snow connection test
+
+      - name: Deploy SIS App
+        id: deploy
+        run: |
+            snow streamlit deploy --replace

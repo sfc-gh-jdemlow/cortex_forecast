@@ -98,4 +98,3 @@ else:
             yaml.dump(forecast_config, f)
         
         st.success("Forecast configuration saved. You can now proceed to the Model Execution page.")
-        st.markdown("**[Click here to go to the Model Execution page](/Model_Execution)**")

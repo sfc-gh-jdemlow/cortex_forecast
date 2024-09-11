@@ -8,7 +8,7 @@ forecast_config:
     on_error: skip
   forecast_days: null
   table: ny_taxi_rides_h3_predict
-  training_days: 60
+  training_days: 30
 input_data:
   exogenous_columns:
   - SCHOOL_HOLIDAY
@@ -26,4 +26,4 @@ model:
     environment: development
     team: data_science
 output:
-  table: NY_TAXI_RIDES_H3_TRAIN_FORECAST_RESULTS
+  table: TESTING_AGAIN

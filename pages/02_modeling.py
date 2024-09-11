@@ -31,6 +31,9 @@ def display_state_sidebar():
 
 st.title("Model Execution")
 
+def get_fully_qualified_name(database, schema, object_name):
+    return f"{database}.{schema}.{object_name}"
+
 display_state_sidebar()
 
 if 'forecast_config' not in st.session_state:
@@ -42,6 +45,16 @@ else:
 
     if st.button("Execute Forecast Model"):
         try:
+            # Get the fully qualified name for the table/view
+            fully_qualified_table = get_fully_qualified_name(
+                st.session_state.selected_database,
+                st.session_state.selected_schema,
+                st.session_state.selected_table_view
+            )
+            
+            # Update the forecast_config with the fully qualified table name
+            st.session_state.forecast_config['table_name'] = fully_qualified_table
+
             # Create SnowflakeMLForecast instance
             forecast_model = SnowflakeMLForecast(
                 config=st.session_state.forecast_config,

@@ -13,10 +13,13 @@ import pandas as pd
 import altair as alt
 import logging
 import numpy as np
+import time
+import snowflake.snowpark._internal.utils as snowpark_utils
 
 from typing import Union, Dict
 from datetime import datetime
 from cortex_forecast.connection import SnowparkConnection
+from snowflake.snowpark.exceptions import SnowparkSQLException
 
 logging.getLogger('snowflake.snowpark').setLevel(logging.WARNING)
 
@@ -28,6 +31,9 @@ class SnowflakeMLForecast(SnowparkConnection):
         self.model_name = self._generate_unique_model_name()
         self.training_data_query = None
         self.is_streamlit = is_streamlit
+        self.database = self.config['input_data'].get('database', self.connection_config.get('database'))
+        self.schema = self.config['input_data'].get('schema', self.connection_config.get('schema'))
+        self.temp_table_name = None
 
     def _load_config(self, config: Union[str, Dict]) -> Dict:
         if isinstance(config, str):
@@ -47,9 +53,12 @@ class SnowflakeMLForecast(SnowparkConnection):
         suffix = ''.join(random.choices(string.ascii_lowercase, k=5))
         timestamp = datetime.now().strftime("%Y%m%d")
         return f"{self.config['model']['name']}_{timestamp}_{suffix}"
+    
+    def get_fully_qualified_name(self, object_name):
+        return f"{self.database}.{self.schema}.{object_name}"
 
     def _generate_input_data_sql(self):
-        table = self.config['input_data']['table']
+        table = self.get_fully_qualified_name(self.config['input_data']['table'])
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
         series_col = self.config['input_data'].get('series_column')
@@ -58,7 +67,7 @@ class SnowflakeMLForecast(SnowparkConnection):
 
         # Always include timestamp, target, and series (if present) columns
         base_columns = [f"TO_TIMESTAMP_NTZ({timestamp_col}) AS {timestamp_col}",
-                        f"{target_col} AS {target_col}"]
+                        f"CAST({target_col} AS FLOAT) AS {target_col}"]
         if series_col:
             base_columns.append(f"{series_col} AS {series_col}")
 
@@ -69,8 +78,11 @@ class SnowflakeMLForecast(SnowparkConnection):
             exclude_cols = [timestamp_col, target_col]
             select_clause = f"SELECT {', '.join(base_columns)}, * EXCLUDE ({', '.join(exclude_cols)})"
 
+        # Generate a random name for the temporary table
+        self.temp_table_name = snowpark_utils.random_name_for_temp_object(snowpark_utils.TempObjectType.TABLE)
+
         sql = f"""
-        CREATE OR REPLACE TEMPORARY TABLE {self.model_name}_train AS
+        CREATE OR REPLACE TABLE {self.temp_table_name} AS
         {select_clause}
         FROM {table}
         """
@@ -92,14 +104,14 @@ class SnowflakeMLForecast(SnowparkConnection):
         return sql
 
     def _generate_create_model_sql(self):
-        input_data = f"SYSTEM$REFERENCE('{self.config['input_data']['table_type']}', '{self.model_name}_train')"
+        input_data = f"SYSTEM$REFERENCE('TABLE', '{self.temp_table_name}')"
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
         series_col = self.config['input_data'].get('series_column')
         config_object = self.config['forecast_config'].get('config_object', {})
     
         sql = f"""
-        CREATE OR REPLACE SNOWFLAKE.ML.FORECAST {self.model_name}(
+        CREATE OR REPLACE SNOWFLAKE.ML.FORECAST {self.get_fully_qualified_name(self.model_name)}(
             INPUT_DATA => {input_data},
             TIMESTAMP_COLNAME => '{timestamp_col}',
             TARGET_COLNAME => '{target_col}',
@@ -154,8 +166,8 @@ class SnowflakeMLForecast(SnowparkConnection):
     def _generate_forecast_sql(self):
         try:
             forecast_days = self.config['forecast_config'].get('forecast_days')
-            output_table = self.config['output']['table']
-            input_data_table = self.config['forecast_config'].get('table')
+            output_table = self.get_fully_qualified_name(self.config['output']['table'])
+            input_data_table = self.get_fully_qualified_name(self.config['forecast_config'].get('table')) if self.config['forecast_config'].get('table') else None
             config_object = self.config['forecast_config'].get('config_object', {})
             evaluation_config = config_object.get('evaluation_config', {})
             prediction_interval = evaluation_config.get('prediction_interval', 0.95)
@@ -163,7 +175,12 @@ class SnowflakeMLForecast(SnowparkConnection):
             timestamp_col = self.config['input_data']['timestamp_column']
 
             # Check if the table exists
-            check_table_sql = f"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '{output_table}'"
+            check_table_sql = f"""
+            SELECT COUNT(*) 
+            FROM {self.database}.INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = '{self.schema}' 
+            AND TABLE_NAME = '{self.config['output']['table']}'
+            """
             table_exists = self.session.sql(check_table_sql).collect()[0][0] > 0
 
             if table_exists:
@@ -175,7 +192,7 @@ class SnowflakeMLForecast(SnowparkConnection):
 
             if series_col:
                 sql += f"series::string as {series_col}, "
-    
+
             sql += f"""
                 ts AS {timestamp_col},
                 CASE WHEN forecast < 0 THEN 0 ELSE forecast END AS forecast,
@@ -185,7 +202,7 @@ class SnowflakeMLForecast(SnowparkConnection):
                 CURRENT_TIMESTAMP() AS creation_date,
                 '{self.config['model']['comment']}' AS model_comment
             FROM
-                TABLE({self.model_name}!FORECAST(
+                TABLE({self.get_fully_qualified_name(self.model_name)}!FORECAST(
             """
 
             if input_data_table:
@@ -236,15 +253,31 @@ class SnowflakeMLForecast(SnowparkConnection):
         self.run_command(sql)
 
         self.display("Step 4/4: Fetching forecast results...", content_type="text")
-        forecast_data = self.run_query(f"SELECT * FROM {self.config['output']['table']} ORDER BY {self.config['input_data']['timestamp_column']}")
+        output_table = self.get_fully_qualified_name(self.config['output']['table'])
+        fetch_sql = f"SELECT * FROM {output_table} ORDER BY {self.config['input_data']['timestamp_column']}"
+        
+        max_retries = 5
+        retry_delay = 2  # seconds
 
-        return forecast_data
+        for attempt in range(max_retries):
+            try:
+                forecast_data = self.run_query(fetch_sql)
+                return forecast_data
+            except SnowparkSQLException as e:
+                if "Object does not exist or not authorized" in str(e) and attempt < max_retries - 1:
+                    self.display(f"Table not ready, retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{max_retries})", content_type="text")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    raise
+
+        raise Exception(f"Failed to fetch forecast results after {max_retries} attempts.")
 
     def cleanup(self):
         self.display("Cleaning up temporary tables and models...", content_type="text")
         cleanup_commands = f"""
-        DROP TABLE IF EXISTS {self.model_name}_train;
-        DROP TABLE IF EXISTS {self.config['output']['table']};
+        DROP TABLE IF EXISTS {self.get_fully_qualified_name(self.model_name + '_train')};
+        DROP TABLE IF EXISTS {self.get_fully_qualified_name(self.config['output']['table'])};
         """
         for command in cleanup_commands.split(';'):
             if command.strip():
@@ -275,7 +308,7 @@ class SnowflakeMLForecast(SnowparkConnection):
         return self.training_data_query
 
     def load_historic_actuals(self, historical_steps_back: int):
-        table = self.config['input_data']['table']
+        table = self.get_fully_qualified_name(self.config['input_data']['table'])
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
         series_col = self.config['input_data'].get('series_column')
@@ -315,7 +348,7 @@ class SnowflakeMLForecast(SnowparkConnection):
         series_col = self.config['input_data'].get('series_column')
         timestamp_col = self.config['input_data']['timestamp_column']
         target_col = self.config['input_data']['target_column']
-        output_table = self.config['output']['table']
+        output_table = self.get_fully_qualified_name(self.config['output']['table'])
 
         # Fetch forecast data
         forecast_query = f"""
@@ -469,7 +502,9 @@ class SnowflakeMLForecast(SnowparkConnection):
 
     def show_key_data_aspects(self, series_col=None):
         self.display("Top 10 Feature Importances", content_type="text")
-        feature_importance = f"CALL {self.model_name}!EXPLAIN_FEATURE_IMPORTANCE();"
+        feature_importance = f"CALL {self.get_fully_qualified_name(self.model_name)}!EXPLAIN_FEATURE_IMPORTANCE();"
+
+
         f_i = self.session.sql(feature_importance).collect()
         df_fi = pd.DataFrame(f_i)
         
@@ -487,7 +522,7 @@ class SnowflakeMLForecast(SnowparkConnection):
             self.display(df_fi, content_type="dataframe")
 
         self.display("Underlying Model Metrics", content_type="text")
-        metric_call = f"CALL {self.model_name}!SHOW_EVALUATION_METRICS();"
+        metric_call = f"CALL {self.get_fully_qualified_name(self.model_name)}!SHOW_EVALUATION_METRICS();"
         metrics = self.session.sql(metric_call).collect()
         metrics = [metric.as_dict() for metric in metrics]
         metrics_df = pd.DataFrame(metrics)

@@ -27,7 +27,7 @@ This application leverages Snowflake's ML capabilities to create, run, and sched
    - Run your configured forecast model on demand.
    - View forecast results and visualizations.
 
-4. **Scheduling**: (Coming in anohter release)
+4. **Scheduling**: (Coming in another release)
 
 
 ### How to Use:
@@ -85,27 +85,27 @@ def create_connection_config():
     
     return connection_config
 
-def display_connection_info(session):
+def display_connection_info(session, config):
     snowflake_environment = session.sql('SELECT current_user(), current_version()').collect()
     snowpark_version = VERSION
     
     st.write("Connection Established with the following parameters:")
     st.write(f"User: {snowflake_environment[0][0]}")
-    st.write(f"Role: {session.get_current_role()}")
-    st.write(f"Database: {session.get_current_database()}")
-    st.write(f"Schema: {session.get_current_schema()}")
-    st.write(f"Warehouse: {session.get_current_warehouse()}")
+    st.write(f"Role: {config['role']}")
+    st.write(f"Database: {config['database']}")
+    st.write(f"Schema: {config['schema']}")
+    st.write(f"Warehouse: {config['warehouse']}")
     st.write(f"Snowflake version: {snowflake_environment[0][1]}")
     st.write(f"Snowpark for Python version: {snowpark_version[0]}.{snowpark_version[1]}.{snowpark_version[2]}")
 
 # Create SnowparkConnection if not exists
 if st.session_state.snowpark_connection is None:
     try:
-        # First, try to connect using environment variables
+        # Use default SIS connection parameters
         connection_config = {
-            'user': os.getenv('SNOWFLAKE_USER'),
-            'password': os.getenv('SNOWFLAKE_PASSWORD'),
-            'account': os.getenv('SNOWFLAKE_ACCOUNT'),
+            'user': os.getenv('SNOWFLAKE_USER', ''),
+            'password': os.getenv('SNOWFLAKE_PASSWORD', ''),
+            'account': os.getenv('SNOWFLAKE_ACCOUNT', ''),
             'database': 'CORTEX',
             'warehouse': 'CORTEX_WH',
             'schema': 'DEV',
@@ -117,10 +117,10 @@ if st.session_state.snowpark_connection is None:
 
         st.session_state.connection_config = connection_config
         st.session_state.snowpark_connection = connection
-        display_connection_info(session)
+        display_connection_info(session, connection_config)
         
     except Exception as e:
-        st.error(f"Failed to establish connection using environment variables: {str(e)}")
+        st.error(f"Failed to establish connection using default SIS parameters: {str(e)}")
         st.write("Please provide connection details:")
         
         user_config = create_connection_config()
@@ -131,16 +131,28 @@ if st.session_state.snowpark_connection is None:
                 session = connection.get_session()
                 
                 st.session_state.snowpark_connection = connection
-                display_connection_info(session)
+                st.session_state.connection_config = user_config
+                display_connection_info(session, user_config)
             except Exception as e:
                 st.error(f"Failed to establish connection with provided details: {str(e)}")
 
-# Connection setup (you can keep your existing connection code here)
-if 'snowpark_connection' not in st.session_state:
-    st.session_state.snowpark_connection = None
+# Add options to change database, schema, and warehouse
+if st.session_state.snowpark_connection is not None:
+    st.header("Update Connection Parameters")
+    
+    new_database = st.text_input("Change Database", value=st.session_state.connection_config['database'])
+    new_schema = st.text_input("Change Schema", value=st.session_state.connection_config['schema'])
+    new_warehouse = st.text_input("Change Warehouse", value=st.session_state.connection_config['warehouse'])
+    
+    if st.button("Update Connection"):
+        st.session_state.connection_config['database'] = new_database
+        st.session_state.connection_config['schema'] = new_schema
+        st.session_state.connection_config['warehouse'] = new_warehouse
+        
+        st.success("Connection parameters updated successfully.")
+        display_connection_info(st.session_state.snowpark_connection.get_session(), st.session_state.connection_config)
 
 if st.session_state.snowpark_connection is None:
     st.warning("You are not connected to Snowflake. Please connect to proceed.")
-    # Your connection setup code here
 else:
     st.success("You are connected to Snowflake. You can proceed to the next steps using the sidebar navigation.")
