@@ -5,3 +5,5 @@ dependencies:
   - streamlit
   - plotly
   - snowflake-snowpark-python
+  - cryptography
+  - altair

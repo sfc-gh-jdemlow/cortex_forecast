@@ -152,3 +152,6 @@ checklink/cookies.txt
 requirements.snowflake.txt
 *snowflake_sqlalchemy-1.5.3-py3-none-any.whl
 *03_scheduling.py
+*rsa_key.p8
+*rsa_key.pub
+*forecast_config.yaml

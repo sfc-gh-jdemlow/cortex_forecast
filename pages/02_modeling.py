@@ -51,9 +51,15 @@ else:
                 st.session_state.selected_schema,
                 st.session_state.selected_table_view
             )
-            
-            # Update the forecast_config with the fully qualified table name
-            st.session_state.forecast_config['table_name'] = fully_qualified_table
+            # Update the forecast_config with the fully qualified table name and input_data
+            st.session_state.forecast_config['input_data'] = {
+                'table': fully_qualified_table,
+                'table_type': "view" if "view" in st.session_state.selected_table_view.lower() else "table",
+                'timestamp_column': st.session_state.timestamp_column,
+                'target_column': st.session_state.target_column,
+                'series_column': st.session_state.get('series_column', ''),
+                'exogenous_columns': st.session_state.exogenous_columns
+            }
 
             # Create SnowflakeMLForecast instance
             forecast_model = SnowflakeMLForecast(
@@ -87,9 +93,13 @@ else:
             st.error(f"An error occurred: {str(e)}")
             st.error("Please check your configuration and try again.")
             
-            # Display the generated SQL for debugging
-            if hasattr(forecast_model, 'training_data_query'):
-                st.subheader("Generated SQL Query:")
-                st.code(forecast_model.training_data_query, language="sql")
+            # Display the forecast configuration for debugging
+            st.subheader("Current Forecast Configuration:")
+            st.json(st.session_state.forecast_config)
             
-            st.error("If the problem persists, please contact support with the above information.")
+            # Display the connection configuration for debugging (make sure to hide sensitive information)
+            st.subheader("Current Connection Configuration:")
+            safe_connection_config = {k: v for k, v in st.session_state.connection_config.items() if k not in ['password', 'private_key']}
+            st.json(safe_connection_config)
+            
+            st.error("If the problem persists, please contact your streamlit developer with the above information")

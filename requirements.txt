@@ -3,3 +3,4 @@ snowflake
 altair
 streamlit
 plotly
+cryptography
