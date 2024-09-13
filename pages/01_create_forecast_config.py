@@ -29,6 +29,19 @@ def display_state_sidebar():
         st.session_state.exogenous_columns = [col.strip() for col in st.session_state.sidebar_exogenous_display.split(",")]
         st.rerun()
 
+
+def set_example_defaults():
+    st.session_state.model_name = "tasty_byte_lobster_forecast"
+    st.session_state.team_name = "data_science"
+    st.session_state.model_comment = "Forecast model for Lobster Mac & Cheese sales"
+    st.session_state.training_days = 365  # One year of training data
+    st.session_state.forecast_days = 30  # Forecast for the next month
+    st.session_state.evaluate = True
+    st.session_state.n_splits = 2
+    st.session_state.gap = 0  # One week gap
+    st.session_state.prediction_interval = 0.95
+    st.session_state.output_table = "LOBSTER_SALES_FORECAST"
+
 st.title("Forecast Configuration")
 
 display_state_sidebar()
@@ -37,6 +50,11 @@ if 'selected_table_view' not in st.session_state:
     st.warning("Please select a table or view on the previous page before configuring the forecast.")
 else:
     st.subheader("Forecast Configuration")
+
+    # Check if example data was loaded
+    if 'example_data_loaded' in st.session_state and st.session_state.example_data_loaded:
+        set_example_defaults()
+        st.info("Example data detected. Configuration fields have been pre-filled with suggested values.")
 
     # Initialize the step if it doesn't exist
     if 'config_step' not in st.session_state:
@@ -127,16 +145,25 @@ else:
             st.session_state.output_table = config['output']['table']
 
             if st.button("Save Configuration"):
+                # Add input_data configuration
+                config['input_data'] = {
+                    'database': st.session_state.selected_database,
+                    'schema': st.session_state.selected_schema,
+                    'table': st.session_state.selected_table_view,
+                    'timestamp_column': st.session_state.timestamp_column,
+                    'target_column': st.session_state.target_column,
+                    'series_column': st.session_state.series_column,
+                    'exogenous_columns': st.session_state.exogenous_columns
+                }
+                
                 with open('forecast_config.yaml', 'w') as f:
                     yaml.dump(config, f)
                 st.success("Forecast configuration saved. You can now proceed to the Model Execution page.")
                 st.session_state.config_step = 7
+                st.session_state.forecast_config = config
 
         return config
 
     forecast_config = create_forecast_config()
-
-    if st.session_state.config_step >= 7:
-        st.session_state.forecast_config = forecast_config
 
     st.sidebar.write(f"Current Step: {st.session_state.config_step + 1}/6")

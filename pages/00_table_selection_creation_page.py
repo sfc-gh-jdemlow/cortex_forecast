@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import os
-
 from snowflake.snowpark.exceptions import SnowparkSQLException
 
 def display_state_sidebar():
@@ -63,6 +62,75 @@ def on_table_view_select():
         st.success(f"Successfully selected table/view: {st.session_state.table_view_select}")
         st.session_state.preview = None  # Reset preview for the new table/view
 
+def load_example_data():
+    conn = st.session_state.snowpark_connection.get_session()
+    
+    try:
+        # Create file format
+        conn.sql("""
+        CREATE OR REPLACE FILE FORMAT csv_ff
+            type = 'csv'
+            SKIP_HEADER = 1,
+            COMPRESSION = AUTO;
+        """).collect()
+
+        # Create stage
+        conn.sql("""
+        CREATE OR REPLACE STAGE s3load 
+            COMMENT = 'Quickstart S3 Stage Connection'
+            url = 's3://sfquickstarts/frostbyte_tastybytes/mlpf_quickstart/'
+            file_format = csv_ff;
+        """).collect()
+
+        # Create table
+        conn.sql("""
+        CREATE OR REPLACE TABLE tasty_byte_sales(
+            DATE DATE,
+            PRIMARY_CITY VARCHAR(16777216),
+            MENU_ITEM_NAME VARCHAR(16777216),
+            TOTAL_SOLD NUMBER(17,0)
+        );
+        """).collect()
+
+        # Load data
+        conn.sql("""
+        COPY INTO tasty_byte_sales FROM @s3load/ml_functions_quickstart.csv;
+        """).collect()
+
+        # Create view for lobster sales
+        conn.sql("""
+        CREATE OR REPLACE VIEW lobster_sales AS (
+            SELECT
+                to_timestamp_ntz(date) as timestamp,
+                total_sold
+            FROM
+                tasty_byte_sales
+            WHERE
+                menu_item_name LIKE 'Lobster Mac & Cheese'
+        );
+        """).collect()
+
+        # Set session state variables
+        st.session_state.selected_database = conn.get_current_database()
+        st.session_state.selected_schema = conn.get_current_schema()
+        st.session_state.selected_table_view = "LOBSTER_SALES"
+        st.session_state.timestamp_column = "TIMESTAMP"
+        st.session_state.target_column = "TOTAL_SOLD"
+        st.session_state.series_column = None
+        st.session_state.exogenous_columns = []
+        
+        # Load preview data
+        st.session_state.preview = conn.sql("SELECT * FROM LOBSTER_SALES LIMIT 5").to_pandas()
+        
+        st.session_state.selection_step = 4
+        st.session_state.example_data_loaded = True  # Set the flag for example data
+        st.success("Example data loaded successfully. You can now proceed to the Forecast Configuration page.")
+    
+    except Exception as e:
+        st.error(f"Error loading example data: {str(e)}")
+        st.session_state.example_data_loaded = False  # Ensure flag is False if loading fails
+
+
 st.title("Database, Schema, and Table/View Selection")
 
 display_state_sidebar()
@@ -76,80 +144,92 @@ else:
     if 'selection_step' not in st.session_state:
         st.session_state.selection_step = 1
 
-    # Initialize databases
-    if 'databases' not in st.session_state:
-        if os.path.isfile("/snowflake/session/token"):
-            st.session_state.databases = pd.DataFrame([os.getenv('SNOWFLAKE_DATABASE')], columns=['name'])
-        else:
-            databases_result = conn.sql("SHOW DATABASES").collect()
-            st.session_state.databases = pd.DataFrame(databases_result, columns=['created_on', 'name', 'is_default', 'is_current', 'origin', 'owner', 'comment', 'options', 'retention_time', 'kind', 'budget', 'owner_role_type'])
+    # Add option to choose between existing assets or example
+    option = st.radio("Choose an option:", ["Use existing assets", "Use example data"])
 
-    # Step 1: Database selection
-    st.subheader("Step 1: Select a database")
-    database_names = [""] + st.session_state.databases['name'].tolist()
-    st.selectbox("Choose a database", database_names, key="database_select", on_change=on_database_select)
+    if option == "Use existing assets":
+        # Initialize databases
+        if 'databases' not in st.session_state:
+            if os.path.isfile("/snowflake/session/token"):
+                st.session_state.databases = pd.DataFrame([os.getenv('SNOWFLAKE_DATABASE')], columns=['name'])
+            else:
+                databases_result = conn.sql("SHOW DATABASES").collect()
+                st.session_state.databases = pd.DataFrame(databases_result, columns=['created_on', 'name', 'is_default', 'is_current', 'origin', 'owner', 'comment', 'options', 'retention_time', 'kind', 'budget', 'owner_role_type'])
 
-    # Step 2: Schema selection
-    if st.session_state.selection_step >= 2:
-        st.subheader("Step 2: Select a schema")
-        if 'schemas' not in st.session_state or st.session_state.schemas is None:
-            schemas_result = conn.sql(f"SHOW SCHEMAS IN DATABASE {st.session_state.selected_database}").collect()
-            st.session_state.schemas = [""] + [row['name'] for row in schemas_result]
-        
-        st.selectbox("Choose a schema", st.session_state.schemas, key="schema_select", on_change=on_schema_select)
+        # Step 1: Database selection
+        st.subheader("Step 1: Select a database")
+        database_names = [""] + st.session_state.databases['name'].tolist()
+        st.selectbox("Choose a database", database_names, key="database_select", on_change=on_database_select)
 
-    # Step 3: Table/View selection
-    if st.session_state.selection_step >= 3:
-        st.subheader("Step 3: Select a table or view")
-        if 'tables_views' not in st.session_state or st.session_state.tables_views is None:
-            tables_result = conn.sql(f"SHOW TABLES IN {st.session_state.selected_database}.{st.session_state.selected_schema}").collect()
-            views_result = conn.sql(f"SHOW VIEWS IN {st.session_state.selected_database}.{st.session_state.selected_schema}").collect()
-            st.session_state.tables_views = [""] + [row['name'] for row in tables_result] + [row['name'] for row in views_result]
-        
-        st.selectbox("Choose a table or view", st.session_state.tables_views, key="table_view_select", on_change=on_table_view_select)
+        # Step 2: Schema selection
+        if st.session_state.selection_step >= 2:
+            st.subheader("Step 2: Select a schema")
+            if 'schemas' not in st.session_state or st.session_state.schemas is None:
+                schemas_result = conn.sql(f"SHOW SCHEMAS IN DATABASE {st.session_state.selected_database}").collect()
+                st.session_state.schemas = [""] + [row['name'] for row in schemas_result]
+            
+            st.selectbox("Choose a schema", st.session_state.schemas, key="schema_select", on_change=on_schema_select)
 
-    # Step 4: Preview and Column Selection
-    if st.session_state.selection_step >= 4:
-        st.subheader("Step 4: Preview and Column Selection")
-        if 'preview' not in st.session_state or st.session_state.preview is None:
-            fully_qualified_name = ensure_fully_qualified_name(st.session_state.selected_database, st.session_state.selected_schema, st.session_state.selected_table_view)
-            st.session_state.preview = conn.table(fully_qualified_name).limit(5).to_pandas()
-        
-        st.write("Table/View preview:")
-        st.dataframe(st.session_state.preview)
+        # Step 3: Table/View selection
+        if st.session_state.selection_step >= 3:
+            st.subheader("Step 3: Select a table or view")
+            if 'tables_views' not in st.session_state or st.session_state.tables_views is None:
+                tables_result = conn.sql(f"SHOW TABLES IN {st.session_state.selected_database}.{st.session_state.selected_schema}").collect()
+                views_result = conn.sql(f"SHOW VIEWS IN {st.session_state.selected_database}.{st.session_state.selected_schema}").collect()
+                st.session_state.tables_views = [""] + [row['name'] for row in tables_result] + [row['name'] for row in views_result]
+            
+            st.selectbox("Choose a table or view", st.session_state.tables_views, key="table_view_select", on_change=on_table_view_select)
 
-        if 'columns' not in st.session_state:
-            st.session_state.columns = [""] + st.session_state.preview.columns.tolist()
+        # Step 4: Preview and Column Selection
+        if st.session_state.selection_step >= 4:
+            st.subheader("Step 4: Preview and Column Selection")
+            if 'preview' not in st.session_state or st.session_state.preview is None:
+                fully_qualified_name = ensure_fully_qualified_name(st.session_state.selected_database, st.session_state.selected_schema, st.session_state.selected_table_view)
+                st.session_state.preview = conn.table(fully_qualified_name).limit(5).to_pandas()
+            
+            st.write("Table/View preview:")
+            st.dataframe(st.session_state.preview)
 
-        st.selectbox("Select timestamp column", st.session_state.columns, key="timestamp_select")
-        st.selectbox("Select target column", st.session_state.columns, key="target_select")
-        
-        series_or_not = st.radio("Multi Forecast", ["No", "Yes"])
-        if series_or_not == "Yes":
-            st.selectbox("Select series column", st.session_state.columns, key="series_select")
+            if 'columns' not in st.session_state:
+                st.session_state.columns = [""] + st.session_state.preview.columns.tolist()
 
-        # Exogenous variables selection
-        st.subheader("Exogenous Variables Selection")
-        exog_option = st.radio("Choose exogenous variables option", ["Select all other columns", "Choose specific columns"])
-        
-        if exog_option == "Select all other columns":
-            excluded_columns = [st.session_state.timestamp_select, st.session_state.target_select]
+            st.selectbox("Select timestamp column", st.session_state.columns, key="timestamp_select")
+            st.selectbox("Select target column", st.session_state.columns, key="target_select")
+            
+            series_or_not = st.radio("Multi Forecast", ["No", "Yes"])
             if series_or_not == "Yes":
-                excluded_columns.append(st.session_state.series_select)
-            exog_columns = [col for col in st.session_state.columns[1:] if col not in excluded_columns]  # Exclude blank option
-            st.write(f"Selected exogenous variables: {', '.join(exog_columns)}")
-            st.session_state.exog_select = exog_columns
-        else:
-            available_exog_columns = [col for col in st.session_state.columns[1:] if col not in [st.session_state.timestamp_select, st.session_state.target_select, st.session_state.get('series_select')]]
-            st.session_state.exog_select = st.multiselect("Select exogenous variables", available_exog_columns, key="exog_multiselect")
+                st.selectbox("Select series column", st.session_state.columns, key="series_select")
 
-        if st.button("Confirm Selection"):
-            st.session_state.timestamp_column = st.session_state.timestamp_select
-            st.session_state.target_column = st.session_state.target_select
-            st.session_state.series_column = st.session_state.series_select if series_or_not == "Yes" else None
-            st.session_state.exogenous_columns = st.session_state.exog_select
-            st.success("Selection confirmed. Please proceed to the Forecast Configuration page.")
+            # Exogenous variables selection
+            st.subheader("Exogenous Variables Selection")
+            exog_option = st.radio("Choose exogenous variables option", ["Select all other columns", "Choose specific columns"])
+            
+            if exog_option == "Select all other columns":
+                excluded_columns = [st.session_state.timestamp_select, st.session_state.target_select]
+                if series_or_not == "Yes":
+                    excluded_columns.append(st.session_state.series_select)
+                exog_columns = [col for col in st.session_state.columns[1:] if col not in excluded_columns]  # Exclude blank option
+                st.write(f"Selected exogenous variables: {', '.join(exog_columns)}")
+                st.session_state.exog_select = exog_columns
+            else:
+                available_exog_columns = [col for col in st.session_state.columns[1:] if col not in [st.session_state.timestamp_select, st.session_state.target_select, st.session_state.get('series_select')]]
+                st.session_state.exog_select = st.multiselect("Select exogenous variables", available_exog_columns, key="exog_multiselect")
 
+            if st.button("Confirm Selection"):
+                st.session_state.timestamp_column = st.session_state.timestamp_select
+                st.session_state.target_column = st.session_state.target_select
+                st.session_state.series_column = st.session_state.series_select if series_or_not == "Yes" else None
+                st.session_state.exogenous_columns = st.session_state.exog_select
+                st.success("Selection confirmed. Please proceed to the Forecast Configuration page.")
+
+    else:  # Use example data
+        st.subheader("Using Example Data")
+        st.write("This will load example data for the Tasty Byte Lobster Mac & Cheese sales forecast.")
+        st.warning("This will create a new table, view, and load data into your Snowflake account. Do not proceed if you already have these assets.", icon="warning")
+        st.warning("This is going to have all the defaults for you so that you are able to see it in action quickly", icon="warning")
+
+        if st.button("Load Example Data"):
+            load_example_data()
 
     # Display current step
     st.sidebar.write(f"Current Step: {st.session_state.selection_step}")
