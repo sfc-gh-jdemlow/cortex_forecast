@@ -103,6 +103,7 @@ else:
                 st.rerun()
 
         if st.session_state.config_step >= 4:
+            st.info("If you don't have exogenous columns you should be using Use Forecast Days", icon="🚨")
             forecast_input_type = st.radio("Forecast Mode", ["Use Table for Prediction", "Use Forecast Days"], key="forecast_mode_radio")
             if forecast_input_type == "Use Forecast Days":
                 config['forecast_config']['forecast_days'] = st.number_input("Forecast Days", value=st.session_state.get('forecast_days', 30), min_value=1, key="forecast_days_input")

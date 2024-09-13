@@ -225,8 +225,7 @@ else:
     else:  # Use example data
         st.subheader("Using Example Data")
         st.write("This will load example data for the Tasty Byte Lobster Mac & Cheese sales forecast.")
-        st.warning("This will create a new table, view, and load data into your Snowflake account. Do not proceed if you already have these assets.", icon="warning")
-        st.warning("This is going to have all the defaults for you so that you are able to see it in action quickly", icon="warning")
+        st.warning("This will create a new table, view, and load data into your Snowflake account.", icon="🚨")
 
         if st.button("Load Example Data"):
             load_example_data()
