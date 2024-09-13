@@ -9,7 +9,6 @@ __all__ = ['AuthenticationError', 'SnowparkConnection']
 import os
 import logging
 import yaml
-import base64
 
 from typing import Optional, Dict
 from snowflake.snowpark import Session
