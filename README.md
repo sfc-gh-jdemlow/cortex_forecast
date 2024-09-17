@@ -78,16 +78,69 @@ snow streamlit deploy --replace
 This will provide you with a URL that you can use to access the
 streamlit app that is running in Snowflake.
 
-# Snowflake ML Forecast: From Code to Application
+## Streamlit Application
 
-## Introduction
+The Streamlit application provides a user-friendly interface to the
+SnowflakeMLForecast functionality.
 
-Welcome to the Snowflake ML Forecast tool! This project combines a
-powerful Python class for creating and managing forecast models with a
-user-friendly Streamlit application. Whether you’re a developer looking
-to integrate forecasting into your Python scripts or an analyst wanting
-to quickly generate forecasts through a web interface, this tool has you
-covered.
+### Key Features
+
+- Choose between your own data or a pre-loaded example dataset
+- Step-by-step forecast configuration
+- Interactive visualization of results
+
+### How to Run the Application
+
+To run the Streamlit application, use the following command in your
+terminal:
+
+``` bash
+streamlit run streamlit_app.py
+```
+
+This will start the Streamlit server and open the application in your
+default web browser.
+
+### How to Use
+
+1.  **Data Selection**
+
+    - Choose between your Snowflake data or the example dataset
+
+    - If using your data, select the database, schema, and table/view
+
+    - Specify timestamp, target, and optional series/exogenous columns
+
+2.  **Forecast Configuration**
+
+    - Set model name, tags, and comments
+
+    - Configure forecast parameters (training days, forecast horizon)
+
+    - Set advanced options like evaluation settings
+
+3.  **Model Execution**
+
+    - Review settings and run the forecast
+
+    - View results including charts and statistics
+
+## Tips for Best Results
+
+- Ensure consistent frequency in your time series data
+
+- Include sufficient historical data to capture seasonal patterns
+
+- Experiment with different configuration settings
+
+- For your own data, carefully select relevant exogenous variables
+
+Remember, these code snippets are integrated into the Streamlit
+application, allowing for an interactive experience. Users can modify
+parameters, load their own data, and see results in real-time through
+the web interface.
+
+# Snowflake ML Forecast
 
 > Note: This is a POC and is not production ready. It’s designed to get
 > you 80-90% of the way there for simple forecasting use cases, serving
@@ -303,68 +356,6 @@ forecast_config:
 output:
   table: storage_forecast_results
 ```
-
-## Streamlit Application
-
-The Streamlit application provides a user-friendly interface to the
-SnowflakeMLForecast functionality.
-
-### Key Features
-
-- Choose between your own data or a pre-loaded example dataset
-- Step-by-step forecast configuration
-- Interactive visualization of results
-
-### How to Run the Application
-
-To run the Streamlit application, use the following command in your
-terminal:
-
-``` bash
-streamlit run streamlit_app.py
-```
-
-This will start the Streamlit server and open the application in your
-default web browser.
-
-### How to Use
-
-1.  **Data Selection**
-
-    - Choose between your Snowflake data or the example dataset
-
-    - If using your data, select the database, schema, and table/view
-
-    - Specify timestamp, target, and optional series/exogenous columns
-
-2.  **Forecast Configuration**
-
-    - Set model name, tags, and comments
-
-    - Configure forecast parameters (training days, forecast horizon)
-
-    - Set advanced options like evaluation settings
-
-3.  **Model Execution**
-
-    - Review settings and run the forecast
-
-    - View results including charts and statistics
-
-## Tips for Best Results
-
-- Ensure consistent frequency in your time series data
-
-- Include sufficient historical data to capture seasonal patterns
-
-- Experiment with different configuration settings
-
-- For your own data, carefully select relevant exogenous variables
-
-Remember, these code snippets are integrated into the Streamlit
-application, allowing for an interactive experience. Users can modify
-parameters, load their own data, and see results in real-time through
-the web interface.
 
 ## Versatility and Adaptability
 
