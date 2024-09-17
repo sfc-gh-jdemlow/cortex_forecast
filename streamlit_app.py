@@ -77,10 +77,10 @@ def create_connection_config():
         'account': st.text_input("Snowflake Account"),
         'user': st.text_input("Username"),
         'password': st.text_input("Password", type="password"),
-        'role': st.text_input("Role", value="CORTEX_USER_ROLE"),
-        'warehouse': st.text_input("Warehouse", value="CORTEX_WH"),
-        'database': st.text_input("Database", value="CORTEX"),
-        'schema': st.text_input("Schema", value="DEV")
+        'role': st.text_input("Role"),
+        'warehouse': st.text_input("Warehouse"),
+        'database': st.text_input("Database"),
+        'schema': st.text_input("Schema")
     }
     
     return connection_config
